@@ -61,3 +61,6 @@ typeCheckingMode = "strict"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "--cov=tractable --cov-report=term-missing"
+markers = [
+    "integration: marks tests that require external services (deselect with '-m not integration')",
+]

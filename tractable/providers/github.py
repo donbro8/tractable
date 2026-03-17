@@ -1,0 +1,304 @@
+"""GitHubProvider — concrete implementation of GitProvider for GitHub.
+
+Implements read operations only (Phase 1). Write operations
+(create_branch, create_pull_request, merge_pull_request, set_branch_protection)
+are defined as stubs that raise NotImplementedError.
+
+Uses httpx for GitHub REST API calls and git subprocess for cloning.
+
+Source: tech-spec.py §2.1 — GitProvider Protocol
+"""
+
+from __future__ import annotations
+
+import base64
+import os
+import subprocess
+from collections.abc import Sequence
+from datetime import datetime
+from typing import Any, Literal, cast
+
+import httpx
+import structlog
+
+from tractable.errors import RecoverableError, TransientError
+from tractable.types.config import GitProviderConfig
+from tractable.types.git import (
+    BranchProtectionRules,
+    CommitEntry,
+    FileEntry,
+    MergeResult,
+    PullRequestHandle,
+)
+
+logger = structlog.get_logger(__name__)
+
+_GITHUB_API_BASE = "https://api.github.com"
+
+
+class GitHubProvider:
+    """Concrete implementation of the GitProvider Protocol for GitHub.
+
+    Only read operations are implemented (Phase 1). Write operations raise
+    ``NotImplementedError("Implemented in Phase 2")``.
+
+    The GitHub token is resolved from the environment variable named by
+    ``config.credentials_secret_ref`` at construction time. If the variable
+    is absent the constructor raises immediately — never at first API call.
+
+    The token value is NEVER written to log output.
+    """
+
+    def __init__(self, config: GitProviderConfig | None = None) -> None:
+        if config is None:
+            config = GitProviderConfig(
+                provider_type="github",
+                credentials_secret_ref="GITHUB_TOKEN",
+            )
+        cred_var = config.credentials_secret_ref
+        token = os.environ.get(cred_var)
+        if token is None:
+            raise OSError(
+                f"GitHub credentials not found: environment variable '{cred_var}' is not set. "
+                "Set this variable to a GitHub personal access token with 'repo' scope."
+            )
+        # Store token privately — never reference self._token in any log call.
+        self._token = token
+        self._base_url = (config.base_url or _GITHUB_API_BASE).rstrip("/")
+        self._default_branch = config.default_branch
+        self._headers: dict[str, str] = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _make_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(base_url=self._base_url, headers=self._headers)
+
+    def _handle_response_errors(self, response: httpx.Response, context: str) -> None:
+        """Convert GitHub HTTP error codes to domain errors."""
+        if response.status_code == 403:
+            retry_after = int(response.headers.get("Retry-After", "60"))
+            raise TransientError(
+                f"GitHub API rate limit exceeded ({context})",
+                retry_after=retry_after,
+            )
+        if response.status_code == 404:
+            raise RecoverableError(f"GitHub resource not found: {context}")
+        response.raise_for_status()
+
+    # ── Read operations ───────────────────────────────────────────────────
+
+    async def clone(
+        self,
+        repo_id: str,
+        target_path: str,
+        branch: str = "main",
+        sparse_paths: Sequence[str] | None = None,
+    ) -> str:
+        """Clone or sparse-checkout a repository. Returns local path.
+
+        The clone URL contains the token and is NEVER logged.
+        """
+        log = logger.bind(repo=repo_id, branch=branch)
+        log.info("git.clone.start")
+
+        # Build authenticated URL — never pass this to structlog.
+        clone_url = f"https://x-access-token:{self._token}@github.com/{repo_id}.git"
+
+        if sparse_paths:
+            result: subprocess.CompletedProcess[str] = subprocess.run(
+                [
+                    "git", "clone",
+                    "--filter=blob:none", "--sparse",
+                    "--branch", branch,
+                    clone_url, target_path,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise RecoverableError(
+                    f"Failed to clone {repo_id} (branch={branch}): git exited {result.returncode}"
+                )
+            sparse_result: subprocess.CompletedProcess[str] = subprocess.run(
+                ["git", "sparse-checkout", "set", *sparse_paths],
+                capture_output=True,
+                text=True,
+                cwd=target_path,
+            )
+            if sparse_result.returncode != 0:
+                raise RecoverableError(
+                    f"Failed to configure sparse checkout for {repo_id}: "
+                    f"git exited {sparse_result.returncode}"
+                )
+        else:
+            result = subprocess.run(
+                ["git", "clone", "--branch", branch, clone_url, target_path],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                raise RecoverableError(
+                    f"Failed to clone {repo_id} (branch={branch}): git exited {result.returncode}"
+                )
+
+        log.info("git.clone.done")
+        return target_path
+
+    async def get_file_content(
+        self,
+        repo_id: str,
+        file_path: str,
+        ref: str = "main",
+    ) -> bytes:
+        """Read a single file at a given ref. Handles files up to 1 MB."""
+        async with self._make_client() as client:
+            response = await client.get(
+                f"/repos/{repo_id}/contents/{file_path}",
+                params={"ref": ref},
+            )
+        self._handle_response_errors(response, f"{repo_id}/{file_path}@{ref}")
+        data: Any = response.json()
+        raw_content: Any = data.get("content", "")
+        if not isinstance(raw_content, str):
+            raw_content = ""
+        return base64.b64decode(raw_content)
+
+    async def list_files(
+        self,
+        repo_id: str,
+        path: str = "",
+        ref: str = "main",
+    ) -> Sequence[FileEntry]:
+        """List files and directories at *path* for the given ref."""
+        async with self._make_client() as client:
+            response = await client.get(
+                f"/repos/{repo_id}/contents/{path}",
+                params={"ref": ref},
+            )
+        self._handle_response_errors(response, f"{repo_id}/{path or '<root>'}@{ref}")
+        items: Any = response.json()
+        entries: list[FileEntry] = []
+        for item in items:
+            item_path: Any = item.get("path", "")
+            item_type: Any = item.get("type", "")
+            item_size: Any = item.get("size")
+            item_sha: Any = item.get("sha")
+            entries.append(
+                FileEntry(
+                    path=str(item_path),
+                    is_directory=(item_type == "dir"),
+                    size_bytes=int(item_size) if isinstance(item_size, int) else None,
+                    sha=str(item_sha) if item_sha is not None else None,
+                )
+            )
+        return entries
+
+    async def get_diff(
+        self,
+        repo_id: str,
+        base_ref: str,
+        head_ref: str,
+    ) -> str:
+        """Return the unified diff between two refs."""
+        async with self._make_client() as client:
+            response = await client.get(
+                f"/repos/{repo_id}/compare/{base_ref}...{head_ref}",
+                headers={"Accept": "application/vnd.github.diff"},
+            )
+        self._handle_response_errors(response, f"{repo_id} {base_ref}...{head_ref}")
+        return response.text
+
+    async def get_commit_history(
+        self,
+        repo_id: str,
+        path: str | None = None,
+        since: datetime | None = None,
+        limit: int = 50,
+    ) -> Sequence[CommitEntry]:
+        """Return commit history, optionally filtered by path and/or since timestamp."""
+        params: dict[str, str] = {"per_page": str(limit)}
+        if path is not None:
+            params["path"] = path
+        if since is not None:
+            params["since"] = since.isoformat()
+
+        async with self._make_client() as client:
+            response = await client.get(
+                f"/repos/{repo_id}/commits",
+                params=params,
+            )
+        self._handle_response_errors(response, f"{repo_id} commit history")
+
+        raw_commits: Any = response.json()
+        commits: list[CommitEntry] = []
+        for c in raw_commits:
+            c_dict = cast(dict[str, Any], c)
+            commit_meta_raw: Any = c_dict.get("commit", {})
+            if not isinstance(commit_meta_raw, dict):
+                continue
+            commit_meta = cast(dict[str, Any], commit_meta_raw)
+            author_raw: Any = commit_meta.get("author") or {}
+            author_meta = cast(dict[str, Any], author_raw) if isinstance(author_raw, dict) else {}
+            raw_date: str = str(author_meta.get("date") or "1970-01-01T00:00:00Z")
+            raw_files: Any = c_dict.get("files", [])
+            files_changed: list[str] = []
+            raw_files_list: list[Any] = (
+                cast(list[Any], raw_files) if isinstance(raw_files, list) else []
+            )
+            for f_item in raw_files_list:
+                f_dict = cast(dict[str, Any], f_item) if isinstance(f_item, dict) else {}
+                fname: Any = f_dict.get("filename", "")
+                if isinstance(fname, str) and fname:
+                    files_changed.append(fname)
+            commits.append(
+                CommitEntry(
+                    sha=str(c_dict.get("sha") or ""),
+                    message=str(commit_meta.get("message") or ""),
+                    author=str(author_meta.get("name") or ""),
+                    timestamp=datetime.fromisoformat(raw_date.replace("Z", "+00:00")),
+                    files_changed=files_changed,
+                )
+            )
+        return commits
+
+    # ── Write operations (Phase 2 stubs) ─────────────────────────────────
+
+    async def create_branch(
+        self,
+        repo_id: str,
+        branch_name: str,
+        from_ref: str = "main",
+    ) -> str:
+        raise NotImplementedError("Implemented in Phase 2")
+
+    async def create_pull_request(
+        self,
+        repo_id: str,
+        title: str,
+        body: str,
+        head_branch: str,
+        base_branch: str = "main",
+        reviewers: Sequence[str] | None = None,
+        labels: Sequence[str] | None = None,
+    ) -> PullRequestHandle:
+        raise NotImplementedError("Implemented in Phase 2")
+
+    async def merge_pull_request(
+        self,
+        repo_id: str,
+        pr_handle: PullRequestHandle,
+        strategy: Literal["merge", "squash", "rebase"] = "squash",
+    ) -> MergeResult:
+        raise NotImplementedError("Implemented in Phase 2")
+
+    async def set_branch_protection(
+        self,
+        repo_id: str,
+        branch: str,
+        rules: BranchProtectionRules,
+    ) -> None:
+        raise NotImplementedError("Implemented in Phase 2")
