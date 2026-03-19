@@ -20,6 +20,14 @@ import structlog.contextvars
 from tractable.logging import bind_context, clear_context, configure_logging
 
 
+@pytest.fixture(autouse=True)
+def reset_structlog() -> pytest.Generator[None, None, None]:
+    """Restore structlog defaults and clear context vars after every test."""
+    yield
+    structlog.reset_defaults()
+    structlog.contextvars.clear_contextvars()
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

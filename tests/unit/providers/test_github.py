@@ -208,6 +208,20 @@ async def test_get_file_content_not_found_raises_recoverable_error(
         await provider.get_file_content("owner/repo", "missing.py")
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_get_file_content_recoverable_on_404(
+    provider: GitHubProvider,
+) -> None:
+    """AC-3: get_file_content with 404 response → RecoverableError (named for AC verification)."""
+    respx.get("https://api.github.com/repos/owner/repo/contents/src/app.py").mock(
+        return_value=httpx.Response(404, json={"message": "Not Found"})
+    )
+
+    with pytest.raises(RecoverableError):
+        await provider.get_file_content("owner/repo", "src/app.py")
+
+
 # ── list_files ────────────────────────────────────────────────────────────────
 
 

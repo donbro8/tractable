@@ -465,31 +465,36 @@ async def test_file_parsed_structlog_event(
     capfd: pytest.CaptureFixture[str],
 ) -> None:
     """Each successfully parsed file emits a structlog file_parsed event."""
+    import structlog as _structlog
+
     from tractable.logging import configure_logging
 
     configure_logging(env="production")
+    try:
 
-    with tempfile.TemporaryDirectory() as tmp:
-        _create_python_files(tmp, count=2)
-        registration = _make_registration(tmp)
-        graph = _make_mock_graph()
+        with tempfile.TemporaryDirectory() as tmp:
+            _create_python_files(tmp, count=2)
+            registration = _make_registration(tmp)
+            graph = _make_mock_graph()
 
-        with patch("tractable.parsing.pipeline.create_git_provider") as mock_factory:
-            mock_provider = MagicMock()
-            mock_provider.clone = _make_clone_mock(tmp)
-            mock_factory.return_value = mock_provider
+            with patch("tractable.parsing.pipeline.create_git_provider") as mock_factory:
+                mock_provider = MagicMock()
+                mock_provider.clone = _make_clone_mock(tmp)
+                mock_factory.return_value = mock_provider
 
-            await pipeline.ingest_repository(registration, graph)
+                await pipeline.ingest_repository(registration, graph)
 
-    out, _ = capfd.readouterr()
-    lines = out.strip().split("\n")
+        out, _ = capfd.readouterr()
+        lines = out.strip().split("\n")
 
-    # Find lines that contain the file_parsed event
-    file_parsed_lines = [ln for ln in lines if "file_parsed" in ln]
-    assert len(file_parsed_lines) == 2, (
-        f"Expected 2 file_parsed events, found {len(file_parsed_lines)}"
-    )
+        # Find lines that contain the file_parsed event
+        file_parsed_lines = [ln for ln in lines if "file_parsed" in ln]
+        assert len(file_parsed_lines) == 2, (
+            f"Expected 2 file_parsed events, found {len(file_parsed_lines)}"
+        )
 
-    for ln in file_parsed_lines:
-        assert "entity_count" in ln
-        assert "file_path" in ln
+        for ln in file_parsed_lines:
+            assert "entity_count" in ln
+            assert "file_path" in ln
+    finally:
+        _structlog.reset_defaults()
