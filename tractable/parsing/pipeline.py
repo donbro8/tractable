@@ -83,6 +83,7 @@ def _is_in_scope(rel_path: str, registration: RepositoryRegistration) -> bool:
 def _entity_to_mutation(entity: ParsedEntity, repo: str) -> TemporalMutation:
     """Convert a ParsedEntity to a create_entity TemporalMutation."""
     payload: dict[str, Any] = {
+        "id": entity.qualified_name,
         "kind": entity.kind,
         "name": entity.name,
         "qualified_name": entity.qualified_name,
@@ -103,8 +104,8 @@ def _relationship_to_mutation(rel: ParsedRelationship, repo: str) -> TemporalMut
     """Convert a ParsedRelationship to a create_edge TemporalMutation."""
     payload: dict[str, Any] = {
         "repo": repo,
-        "source": rel.source_qualified_name,
-        "target": rel.target_qualified_name,
+        "source_entity_id": rel.source_qualified_name,
+        "target_entity_id": rel.target_qualified_name,
         "relationship": rel.relationship,
         "confidence": rel.confidence,
         "resolution": rel.resolution,
