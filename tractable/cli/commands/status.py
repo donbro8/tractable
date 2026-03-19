@@ -10,7 +10,8 @@ import structlog
 import typer
 from rich.table import Table
 
-from tractable.cli.output import console, print_error
+from tractable.cli.output import console
+from tractable.errors import FatalError
 
 log = structlog.get_logger(__name__)
 
@@ -28,7 +29,7 @@ async def _fetch_contexts() -> list[dict[str, Any]]:
 
     url = os.environ.get("DATABASE_URL", "")
     if not url:
-        raise RuntimeError("DATABASE_URL environment variable is not set.")
+        raise FatalError("DATABASE_URL environment variable is not set.")
 
     engine = create_async_engine(url, pool_pre_ping=True)
     factory: async_sessionmaker[Any] = async_sessionmaker(engine, expire_on_commit=False)
@@ -57,13 +58,11 @@ def status(ctx: typer.Context) -> None:
 
     try:
         contexts = asyncio.run(_fetch_contexts())
-    except RuntimeError as exc:
-        print_error(str(exc))
-        raise typer.Exit(code=1) from exc
+    except FatalError:
+        raise
     except Exception as exc:
         log.exception("status.fetch_failed")
-        print_error(f"Could not connect to database: {exc}")
-        raise typer.Exit(code=1) from exc
+        raise FatalError(f"Could not connect to database: {exc}") from exc
 
     if not contexts:
         console.print(_NO_AGENTS_MSG)

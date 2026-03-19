@@ -19,7 +19,8 @@ import structlog
 import typer
 from rich.table import Table
 
-from tractable.cli.output import console, print_error, print_success
+from tractable.cli.output import console, print_success
+from tractable.errors import FatalError
 from tractable.types.config import RepositoryRegistration
 
 log = structlog.get_logger(__name__)
@@ -31,7 +32,7 @@ def _load_registration(config_path: Path) -> RepositoryRegistration:
     """Load a Python config file and return the first RepositoryRegistration found."""
     spec = importlib.util.spec_from_file_location("_tractable_config", config_path)
     if spec is None or spec.loader is None:
-        raise ValueError(f"Cannot load module from {config_path}")
+        raise FatalError(f"Cannot load module from {config_path}")
 
     module = types.ModuleType("_tractable_config")
     spec.loader.exec_module(module)  # type: ignore[union-attr]
@@ -40,7 +41,7 @@ def _load_registration(config_path: Path) -> RepositoryRegistration:
         if isinstance(obj, RepositoryRegistration):
             return obj
 
-    raise ValueError(
+    raise FatalError(
         f"No RepositoryRegistration instance found in {config_path}. "
         "Define one at module level: registration = RepositoryRegistration(...)"
     )
@@ -81,19 +82,18 @@ def register(
 
     # Validate file exists
     if not config_path.exists():
-        print_error(f"Config file not found: {config_path}")
-        raise typer.Exit(code=1)
+        raise FatalError(f"Config file not found: {config_path}")
 
     if not config_path.is_file():
-        print_error(f"Path is not a file: {config_path}")
-        raise typer.Exit(code=1)
+        raise FatalError(f"Path is not a file: {config_path}")
 
     # Load and validate RepositoryRegistration
     try:
         registration = _load_registration(config_path)
-    except (ValueError, Exception) as exc:
-        print_error(str(exc))
-        raise typer.Exit(code=1) from exc
+    except FatalError:
+        raise
+    except Exception as exc:
+        raise FatalError(str(exc)) from exc
 
     # Print registration summary
     summary_table = Table(show_header=False, box=None, padding=(0, 1))
@@ -109,10 +109,11 @@ def register(
     console.print("[bold]Running ingestion pipeline...[/bold]")
     try:
         result = asyncio.run(_run_ingest(registration))
+    except FatalError:
+        raise
     except Exception as exc:
         log.exception("register.ingest_failed", repo=registration.name)
-        print_error(f"Ingestion failed: {exc}")
-        raise typer.Exit(code=1) from exc
+        raise FatalError(f"Ingestion failed: {exc}") from exc
 
     # Report results
     console.print(

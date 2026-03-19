@@ -7,7 +7,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from typer.testing import CliRunner
 
+from typer.testing import CliRunner
+
 from tractable.cli.main import app
+from tractable.errors import FatalError
 
 runner = CliRunner()
 
@@ -50,11 +53,12 @@ def test_status_with_agents_prints_table() -> None:
 def test_status_missing_database_url_exits_1() -> None:
     with patch(
         "tractable.cli.commands.status._fetch_contexts",
-        new=AsyncMock(side_effect=RuntimeError("DATABASE_URL environment variable is not set.")),
+        new=AsyncMock(side_effect=FatalError("DATABASE_URL environment variable is not set.")),
     ):
         result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 1
+    assert isinstance(result.exception, FatalError)
 
 
 # Database connection error → exit code 1
@@ -66,6 +70,7 @@ def test_status_db_connection_error_exits_1() -> None:
         result = runner.invoke(app, ["status"])
 
     assert result.exit_code == 1
+    assert isinstance(result.exception, FatalError)
 
 
 # Multiple agents are listed

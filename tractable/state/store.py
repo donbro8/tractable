@@ -15,21 +15,41 @@ Usage:
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import AsyncGenerator, Sequence
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError, OperationalError, TimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from tractable.errors import FatalError, RecoverableError, TransientError
 from tractable.state.models import AgentCheckpointORM, AgentContextORM, AuditEntryORM
 from tractable.types.agent import AgentCheckpoint, AgentContext, AuditEntry
 from tractable.types.enums import TaskPhase
 
+log = structlog.get_logger(__name__)
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
+
+
+@asynccontextmanager
+async def _catch_db_errors() -> AsyncGenerator[None, None]:
+    """Map SQLAlchemy exceptions to Tractable error taxonomy."""
+    try:
+        yield
+    except OperationalError as exc:
+        raise TransientError("Database connection lost or unreachable", retry_after=5) from exc
+    except TimeoutError as exc:
+        raise TransientError(
+            "Database operation or pool acquisition timed out", retry_after=5
+        ) from exc
+    except IntegrityError as exc:
+        raise RecoverableError(f"Database integrity constraint violated: {exc}") from exc
 
 
 class PostgreSQLAgentStateStore:
@@ -45,8 +65,19 @@ class PostgreSQLAgentStateStore:
     @classmethod
     def from_env(cls) -> PostgreSQLAgentStateStore:
         """Construct from the ``DATABASE_URL`` environment variable."""
-        url = os.environ["DATABASE_URL"]
-        engine = create_async_engine(url, pool_pre_ping=True)
+        url = os.environ.get("DATABASE_URL")
+        if not url:
+            raise FatalError("DATABASE_URL environment variable is not set.")
+
+        pool_size = int(os.environ.get("TRACTABLE_PG_POOL_SIZE", "5"))
+        max_overflow = int(os.environ.get("TRACTABLE_PG_POOL_MAX_OVERFLOW", "10"))
+
+        engine = create_async_engine(
+            url,
+            pool_pre_ping=True,
+            pool_size=pool_size,
+            max_overflow=max_overflow,
+        )
         factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
             engine, expire_on_commit=False
         )
@@ -55,11 +86,11 @@ class PostgreSQLAgentStateStore:
     # ── AgentContext ──────────────────────────────────────────────────────────
 
     async def get_agent_context(self, agent_id: str) -> AgentContext:
-        """Load agent context; raise ``KeyError`` if not found."""
-        async with self._session_factory() as session:
+        """Load agent context; raise ``RecoverableError`` if not found."""
+        async with _catch_db_errors(), self._session_factory() as session:
             row = await session.get(AgentContextORM, agent_id)
             if row is None:
-                raise KeyError(f"Agent context not found: {agent_id!r}")
+                raise RecoverableError(f"Agent context not found: {agent_id!r}")
             return _orm_to_context(row)
 
     async def save_agent_context(
@@ -87,7 +118,7 @@ class PostgreSQLAgentStateStore:
                 set_={k: v for k, v in values.items() if k != "agent_id"},
             )
         )
-        async with self._session_factory() as session, session.begin():
+        async with _catch_db_errors(), self._session_factory() as session, session.begin():
             await session.execute(stmt)
 
     # ── AgentCheckpoint ───────────────────────────────────────────────────────
@@ -98,7 +129,7 @@ class PostgreSQLAgentStateStore:
         task_id: str,
     ) -> AgentCheckpoint | None:
         """Return the most recent checkpoint for an agent+task pair."""
-        async with self._session_factory() as session:
+        async with _catch_db_errors(), self._session_factory() as session:
             result = await session.execute(
                 select(AgentCheckpointORM)
                 .where(
@@ -129,8 +160,15 @@ class PostgreSQLAgentStateStore:
             token_usage=checkpoint.token_usage,
             created_at=checkpoint.created_at,
         )
-        async with self._session_factory() as session, session.begin():
+        async with _catch_db_errors(), self._session_factory() as session, session.begin():
             session.add(row)
+        
+        log.info(
+            "checkpoint_saved",
+            agent_id=agent_id,
+            task_id=task_id,
+            phase=str(checkpoint.phase),
+        )
 
     # ── AuditEntry ────────────────────────────────────────────────────────────
 
@@ -144,8 +182,14 @@ class PostgreSQLAgentStateStore:
             detail=dict(entry.detail),
             outcome=entry.outcome,
         )
-        async with self._session_factory() as session, session.begin():
+        async with _catch_db_errors(), self._session_factory() as session, session.begin():
             session.add(row)
+
+        log.info(
+            "audit_entry_appended",
+            agent_id=entry.agent_id,
+            entry_type=str(entry.action),
+        )
 
     async def get_audit_log(
         self,
@@ -164,7 +208,7 @@ class PostgreSQLAgentStateStore:
             stmt = stmt.where(AuditEntryORM.timestamp >= since)
         stmt = stmt.limit(limit)
 
-        async with self._session_factory() as session:
+        async with _catch_db_errors(), self._session_factory() as session:
             result = await session.execute(stmt)
             return [_orm_to_audit_entry(row) for row in result.scalars()]
 

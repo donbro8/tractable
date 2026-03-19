@@ -13,6 +13,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from tractable.errors import FatalError
 from tractable.state.models import Base
 
 # Alembic Config object providing access to alembic.ini values
@@ -29,7 +30,7 @@ target_metadata = Base.metadata
 def _get_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if not url:
-        raise RuntimeError(
+        raise FatalError(
             "DATABASE_URL environment variable is not set. "
             "Example: postgresql+asyncpg://user:pass@localhost:5433/tractable"
         )

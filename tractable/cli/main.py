@@ -8,10 +8,14 @@ Usage::
 
 from __future__ import annotations
 
+import sys
+
 import typer
 
 from tractable.cli.commands.register import register_app
 from tractable.cli.commands.status import status_app
+from tractable.errors import FatalError
+from tractable.logging import configure_logging
 
 app: typer.Typer = typer.Typer(
     name="tractable",
@@ -25,7 +29,12 @@ app.add_typer(status_app, name="status")
 
 def main() -> None:
     """CLI entry point registered in pyproject.toml."""
-    app()
+    configure_logging()
+    try:
+        app()
+    except FatalError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

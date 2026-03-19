@@ -9,7 +9,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
+from typer.testing import CliRunner
+
 from tractable.cli.main import app
+from tractable.errors import FatalError
 
 
 runner = CliRunner()
@@ -87,7 +90,8 @@ def test_register_help_exits_zero() -> None:
 def test_register_nonexistent_path_exits_1() -> None:
     result = runner.invoke(app, ["register", "/nonexistent/path.py"])
     assert result.exit_code == 1
-    assert "not found" in (result.stderr or result.output).lower() or "error" in (result.stderr or result.output).lower()
+    assert isinstance(result.exception, FatalError)
+    assert "not found" in str(result.exception).lower() or "error" in str(result.exception).lower()
 
 
 # AC-4: Pydantic validation error → exit code 1
@@ -95,6 +99,7 @@ def test_register_pydantic_validation_error(tmp_path: Path) -> None:
     config = _invalid_config(tmp_path)
     result = runner.invoke(app, ["register", str(config)])
     assert result.exit_code == 1
+    assert isinstance(result.exception, FatalError)
 
 
 # No RepositoryRegistration instance → exit code 1
@@ -102,6 +107,7 @@ def test_register_no_registration_in_file(tmp_path: Path) -> None:
     config = _no_registration_config(tmp_path)
     result = runner.invoke(app, ["register", str(config)])
     assert result.exit_code == 1
+    assert isinstance(result.exception, FatalError)
 
 
 # Successful registration (mocked ingest)
@@ -160,6 +166,7 @@ def test_register_ingest_failure_exits_1(tmp_path: Path) -> None:
         result = runner.invoke(app, ["register", str(config)])
 
     assert result.exit_code == 1
+    assert isinstance(result.exception, FatalError)
 
 
 # Registration summary is printed
@@ -188,3 +195,4 @@ def test_register_prints_summary(tmp_path: Path) -> None:
 def test_register_path_is_directory(tmp_path: Path) -> None:
     result = runner.invoke(app, ["register", str(tmp_path)])
     assert result.exit_code == 1
+    assert isinstance(result.exception, FatalError)

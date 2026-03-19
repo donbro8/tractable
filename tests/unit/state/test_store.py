@@ -16,6 +16,7 @@ from tractable.state.models import AgentContextORM, AgentCheckpointORM, AuditEnt
 from tractable.state.store import PostgreSQLAgentStateStore, _orm_to_context
 from tractable.types.agent import AgentCheckpoint, AgentContext, AuditEntry
 from tractable.types.enums import TaskPhase
+from tractable.errors import RecoverableError, TransientError
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -118,12 +119,40 @@ class TestGetAgentContext:
         mock_session.get.assert_awaited_once_with(AgentContextORM, "agent-1")
 
     @pytest.mark.asyncio
-    async def test_raises_key_error_when_missing(self) -> None:
+    async def test_raises_recoverable_error_when_missing(self) -> None:
         store, mock_session = make_store()
         mock_session.get = AsyncMock(return_value=None)
-        with pytest.raises(KeyError, match="agent-1"):
+        with pytest.raises(RecoverableError, match="agent-1"):
             await store.get_agent_context("agent-1")
 
+
+
+# ── Error Mapping ─────────────────────────────────────────────────────────────
+
+class TestDbErrorMapping:
+    @pytest.mark.asyncio
+    async def test_operational_error_mapped_to_transient(self) -> None:
+        from sqlalchemy.exc import OperationalError
+        store, mock_session = make_store()
+        mock_session.execute = AsyncMock(side_effect=OperationalError("select", "params", "orig"))
+        with pytest.raises(TransientError, match="Database connection lost"):
+            await store.get_checkpoint("agent-1", "task-1")
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_mapped_to_transient(self) -> None:
+        import asyncio
+        store, mock_session = make_store()
+        mock_session.execute = AsyncMock(side_effect=asyncio.TimeoutError("timeout"))
+        with pytest.raises(TransientError, match="timed out"):
+            await store.get_checkpoint("agent-1", "task-1")
+
+    @pytest.mark.asyncio
+    async def test_integrity_error_mapped_to_recoverable(self) -> None:
+        from sqlalchemy.exc import IntegrityError
+        store, mock_session = make_store()
+        mock_session.execute = AsyncMock(side_effect=IntegrityError("insert", "params", "orig"))
+        with pytest.raises(RecoverableError, match="integrity constraint violated"):
+            await store.save_agent_context("agent-1", make_context())
 
 # ── save_agent_context ────────────────────────────────────────────────────────
 
@@ -188,15 +217,24 @@ class TestGetCheckpoint:
 
 class TestSaveCheckpoint:
     @pytest.mark.asyncio
-    async def test_adds_row_to_session(self) -> None:
+    async def test_adds_row_to_session_and_logs(self) -> None:
         store, mock_session = make_store()
         added: list[Any] = []
         mock_session.add = MagicMock(side_effect=lambda row: added.append(row))
         cp = make_checkpoint()
-        await store.save_checkpoint("agent-1", "task-42", cp)
+        with patch("tractable.state.store.log.info") as mock_info:
+            await store.save_checkpoint("agent-1", "task-42", cp)
+        
         assert len(added) == 1
         assert isinstance(added[0], AgentCheckpointORM)
         assert added[0].task_id == "task-42"
+        
+        mock_info.assert_called_once_with(
+            "checkpoint_saved",
+            agent_id="agent-1",
+            task_id="task-42",
+            phase="executing",
+        )
 
 
 # ── append_audit_entry ────────────────────────────────────────────────────────
@@ -204,16 +242,24 @@ class TestSaveCheckpoint:
 
 class TestAppendAuditEntry:
     @pytest.mark.asyncio
-    async def test_adds_audit_row(self) -> None:
+    async def test_adds_audit_row_and_logs(self) -> None:
         store, mock_session = make_store()
         added: list[Any] = []
         mock_session.add = MagicMock(side_effect=lambda row: added.append(row))
         entry = make_audit_entry()
-        await store.append_audit_entry(entry)
+        with patch("tractable.state.store.log.info") as mock_info:
+            await store.append_audit_entry(entry)
+        
         assert len(added) == 1
         assert isinstance(added[0], AuditEntryORM)
         assert added[0].outcome == "success"
         assert added[0].action == "file_write"
+        
+        mock_info.assert_called_once_with(
+            "audit_entry_appended",
+            agent_id="agent-1",
+            entry_type="file_write",
+        )
 
 
 # ── get_audit_log ─────────────────────────────────────────────────────────────
