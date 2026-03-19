@@ -27,7 +27,7 @@ from typing import Any, Literal, cast
 import httpx
 import structlog
 
-from tractable.errors import FatalError, RecoverableError, TransientError
+from tractable.errors import FatalError, GovernanceError, RecoverableError, TransientError
 from tractable.types.config import GitProviderConfig
 from tractable.types.git import (
     BranchProtectionRules,
@@ -321,7 +321,23 @@ class GitHubProvider:
         branch_name: str,
         from_ref: str = "main",
     ) -> str:
-        raise RecoverableError("create_branch not yet implemented (Phase 2)")
+        async with self._make_client() as client:
+            check_resp = await client.get(f"/repos/{repo_id}/git/refs/heads/{branch_name}")
+            if check_resp.status_code == 200:
+                raise RecoverableError(f"Branch already exists: {branch_name}")
+
+            ref_resp = await client.get(f"/repos/{repo_id}/git/refs/heads/{from_ref}")
+            self._handle_response_errors(ref_resp, f"get {from_ref} for {repo_id}")
+            from_sha: str = ref_resp.json().get("object", {}).get("sha", "")
+            if not from_sha:
+                raise RecoverableError(f"Could not resolve SHA for {from_ref} in {repo_id}")
+
+            create_resp = await client.post(
+                f"/repos/{repo_id}/git/refs",
+                json={"ref": f"refs/heads/{branch_name}", "sha": from_sha},
+            )
+            self._handle_response_errors(create_resp, f"create branch {branch_name} in {repo_id}")
+            return str(create_resp.json().get("object", {}).get("sha", ""))
 
     async def create_pull_request(
         self,
@@ -333,7 +349,56 @@ class GitHubProvider:
         reviewers: Sequence[str] | None = None,
         labels: Sequence[str] | None = None,
     ) -> PullRequestHandle:
-        raise RecoverableError("create_pull_request not yet implemented (Phase 2)")
+        payload = {
+            "title": title,
+            "body": body,
+            "head": head_branch,
+            "base": base_branch,
+        }
+        async with self._make_client() as client:
+            resp = await client.post(f"/repos/{repo_id}/pulls", json=payload)
+            self._handle_response_errors(resp, f"create PR in {repo_id}")
+
+            data: dict[str, Any] = resp.json()
+            pr_number: int = data.get("number", 0)
+            url: str = data.get("html_url", "")
+
+            handle = PullRequestHandle(
+                provider="github",
+                repo_id=repo_id,
+                pr_number=pr_number,
+                url=url,
+                head_branch=head_branch,
+                base_branch=base_branch,
+            )
+
+            logger.info(
+                "pull_request_created",
+                repo=repo_id,
+                pr_number=pr_number,
+                head_branch=head_branch,
+                base_branch=base_branch,
+            )
+
+            if reviewers:
+                rev_resp = await client.post(
+                    f"/repos/{repo_id}/pulls/{pr_number}/requested_reviewers",
+                    json={"reviewers": list(reviewers)},
+                )
+                self._handle_response_errors(
+                    rev_resp, f"request reviewers for PR {pr_number} in {repo_id}"
+                )
+
+            if labels:
+                lbl_resp = await client.post(
+                    f"/repos/{repo_id}/issues/{pr_number}/labels",
+                    json={"labels": list(labels)},
+                )
+                self._handle_response_errors(
+                    lbl_resp, f"add labels to PR {pr_number} in {repo_id}"
+                )
+
+            return handle
 
     async def merge_pull_request(
         self,
@@ -341,7 +406,35 @@ class GitHubProvider:
         pr_handle: PullRequestHandle,
         strategy: Literal["merge", "squash", "rebase"] = "squash",
     ) -> MergeResult:
-        raise RecoverableError("merge_pull_request not yet implemented (Phase 2)")
+        pr_number = pr_handle.pr_number
+        async with self._make_client() as client:
+            pr_resp = await client.get(f"/repos/{repo_id}/pulls/{pr_number}")
+            self._handle_response_errors(pr_resp, f"fetch PR {pr_number} status in {repo_id}")
+
+            data: dict[str, Any] = pr_resp.json()
+            mergeable_state = data.get("mergeable_state")
+            if mergeable_state == "blocked":
+                raise GovernanceError(
+                    f"PR {pr_number} merge is blocked by unmet review or status requirements."
+                )
+
+            merge_resp = await client.put(
+                f"/repos/{repo_id}/pulls/{pr_number}/merge",
+                json={"merge_method": strategy},
+            )
+            self._handle_response_errors(merge_resp, f"merge PR {pr_number} in {repo_id}")
+
+            merge_data: dict[str, Any] = merge_resp.json()
+            success: bool = merge_data.get("merged", False)
+            sha: str | None = merge_data.get("sha")
+
+            logger.info(
+                "pull_request_merged",
+                repo=repo_id,
+                pr_number=pr_number,
+                merge_method=strategy,
+            )
+            return MergeResult(success=success, merge_commit_sha=sha)
 
     async def set_branch_protection(
         self,

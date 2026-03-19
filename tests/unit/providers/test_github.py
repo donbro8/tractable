@@ -19,7 +19,7 @@ import httpx
 import pytest
 import respx
 
-from tractable.errors import FatalError, RecoverableError, TransientError
+from tractable.errors import FatalError, GovernanceError, RecoverableError, TransientError
 from tractable.protocols.git_provider import GitProvider
 from tractable.providers.factory import create_git_provider
 from tractable.providers.github import GitHubProvider
@@ -313,34 +313,105 @@ async def test_get_commit_history_with_path_filter(provider: GitHubProvider) -> 
     assert "per_page=5" in url_str
 
 
-# ── Write stubs ───────────────────────────────────────────────────────────────
+# ── Write operations ─────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_create_branch_not_implemented(provider: GitHubProvider) -> None:
-    with pytest.raises(RecoverableError, match="Phase 2"):
+@respx.mock
+async def test_create_branch_success(provider: GitHubProvider) -> None:
+    """Returns the SHA of the newly created branch head."""
+    respx.get("https://api.github.com/repos/owner/repo/git/refs/heads/feature/x").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("https://api.github.com/repos/owner/repo/git/refs/heads/main").mock(
+        return_value=httpx.Response(200, json={"object": {"sha": "abc123fromsha"}})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/refs").mock(
+        return_value=httpx.Response(201, json={"object": {"sha": "abc123fromsha"}})
+    )
+
+    sha = await provider.create_branch("owner/repo", "feature/x", from_ref="main")
+    assert sha == "abc123fromsha"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_branch_already_exists(provider: GitHubProvider) -> None:
+    respx.get("https://api.github.com/repos/owner/repo/git/refs/heads/feature/x").mock(
+        return_value=httpx.Response(200)
+    )
+    with pytest.raises(RecoverableError, match="Branch already exists"):
         await provider.create_branch("owner/repo", "feature/x")
 
 
 @pytest.mark.asyncio
-async def test_create_pull_request_not_implemented(provider: GitHubProvider) -> None:
-    with pytest.raises(RecoverableError, match="Phase 2"):
-        await provider.create_pull_request("owner/repo", "title", "body", "feature/x")
+@respx.mock
+async def test_create_pull_request_success(provider: GitHubProvider) -> None:
+    respx.post("https://api.github.com/repos/owner/repo/pulls").mock(
+        return_value=httpx.Response(
+            201,
+            json={"number": 42, "html_url": "https://github.com/owner/repo/pull/42"}
+        )
+    )
+    respx.post("https://api.github.com/repos/owner/repo/pulls/42/requested_reviewers").mock(
+        return_value=httpx.Response(201)
+    )
+    respx.post("https://api.github.com/repos/owner/repo/issues/42/labels").mock(
+        return_value=httpx.Response(200)
+    )
+
+    handle = await provider.create_pull_request(
+        "owner/repo", "Title", "Body", "feature/x", "main", ["alice"], ["bug"]
+    )
+    assert handle.pr_number == 42
+    assert handle.url == "https://github.com/owner/repo/pull/42"
+    assert handle.head_branch == "feature/x"
+    assert handle.base_branch == "main"
 
 
 @pytest.mark.asyncio
-async def test_merge_pull_request_not_implemented(provider: GitHubProvider) -> None:
+@respx.mock
+async def test_merge_pull_request_success(provider: GitHubProvider) -> None:
     from tractable.types.git import PullRequestHandle
 
     pr = PullRequestHandle(
         provider="github",
         repo_id="owner/repo",
-        pr_number=1,
-        url="https://github.com/owner/repo/pull/1",
+        pr_number=42,
+        url="https://github.com/owner/repo/pull/42",
         head_branch="feature/x",
         base_branch="main",
     )
-    with pytest.raises(RecoverableError, match="Phase 2"):
+    respx.get("https://api.github.com/repos/owner/repo/pulls/42").mock(
+        return_value=httpx.Response(200, json={"mergeable_state": "clean"})
+    )
+    respx.put("https://api.github.com/repos/owner/repo/pulls/42/merge").mock(
+        return_value=httpx.Response(200, json={"merged": True, "sha": "mergedsha456"})
+    )
+
+    result = await provider.merge_pull_request("owner/repo", pr, strategy="squash")
+    assert result.success is True
+    assert result.merge_commit_sha == "mergedsha456"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_merge_pull_request_blocked(provider: GitHubProvider) -> None:
+    from tractable.types.git import PullRequestHandle
+
+    pr = PullRequestHandle(
+        provider="github",
+        repo_id="owner/repo",
+        pr_number=42,
+        url="https://github.com/owner/repo/pull/42",
+        head_branch="feature/x",
+        base_branch="main",
+    )
+    respx.get("https://api.github.com/repos/owner/repo/pulls/42").mock(
+        return_value=httpx.Response(200, json={"mergeable_state": "blocked"})
+    )
+    
+    with pytest.raises(GovernanceError, match="blocked by unmet review"):
         await provider.merge_pull_request("owner/repo", pr)
 
 
