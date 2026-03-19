@@ -19,8 +19,10 @@ from __future__ import annotations
 
 import base64
 import os
+import shutil
 import subprocess
-from collections.abc import Sequence
+import urllib.parse
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Any, Literal, cast
 
@@ -40,6 +42,68 @@ from tractable.types.git import (
 logger = structlog.get_logger(__name__)
 
 _GITHUB_API_BASE = "https://api.github.com"
+
+# Characters that must not appear in a repository path passed to subprocess.
+# Covers common shell metacharacters per phase-1-analysis.md §3.6 and §4.3.
+_SHELL_META: frozenset[str] = frozenset(
+    [";", "&", "|", "$", "(", ")", "<", ">", "\\", '"', "'", "`", "\x00"]
+)
+
+
+def _validate_repo_url(repo_id: str) -> str:
+    """Validate *repo_id* and return a normalised ``"org/repo"`` path.
+
+    Accepts two input formats:
+
+    - Full HTTPS URL: ``"https://github.com/org/repo.git"``
+    - Shorthand path: ``"org/repo"``
+
+    Validation rules (from phase-1-analysis.md §4.3):
+
+    - For full URLs: scheme must be ``https``; host must be in the
+      ``TRACTABLE_ALLOWED_GIT_HOSTS`` allowlist (default:
+      ``github.com,api.github.com``); path must not contain ``..``, null
+      bytes, or shell metacharacters.
+    - For shorthand paths: same metacharacter restrictions apply.
+
+    Raises:
+        GovernanceError: if any validation rule is violated.
+    """
+    allowed_raw = os.environ.get(
+        "TRACTABLE_ALLOWED_GIT_HOSTS", "github.com,api.github.com"
+    )
+    allowed_hosts: frozenset[str] = frozenset(
+        h.strip() for h in allowed_raw.split(",") if h.strip()
+    )
+
+    if "://" in repo_id:
+        parsed = urllib.parse.urlparse(repo_id)
+        if parsed.scheme != "https":
+            raise GovernanceError(
+                f"URL validation failed: scheme must be 'https', got '{parsed.scheme}'"
+            )
+        hostname: str = parsed.hostname or ""
+        if hostname not in allowed_hosts:
+            raise GovernanceError(
+                f"URL validation failed: host '{hostname}' is not in the allowed list"
+            )
+        path: str = parsed.path
+        if ".." in path or any(c in path for c in _SHELL_META):
+            raise GovernanceError(
+                "URL validation failed: repository path contains invalid characters"
+            )
+        # Normalise to "org/repo": strip leading "/" and trailing ".git"
+        clean = path.lstrip("/")
+        if clean.endswith(".git"):
+            clean = clean[:-4]
+        return clean
+    else:
+        # Shorthand "org/repo" format — validate path component only.
+        if ".." in repo_id or any(c in repo_id for c in _SHELL_META):
+            raise GovernanceError(
+                "URL validation failed: repository ID contains invalid characters"
+            )
+        return repo_id
 
 
 class GitHubProvider:
@@ -145,53 +209,74 @@ class GitHubProvider:
         target_path: str,
         branch: str = "main",
         sparse_paths: Sequence[str] | None = None,
+        post_clone_fn: Callable[[str], None] | None = None,
     ) -> str:
         """Clone or sparse-checkout a repository. Returns local path.
 
-        The clone URL contains the token and is NEVER logged.
+        *repo_id* may be either a full HTTPS URL
+        (``"https://github.com/org/repo.git"``) or a shorthand path
+        (``"org/repo"``).  The input is validated against scheme, host
+        allowlist, and shell-metacharacter rules before the credentialed
+        clone URL is constructed.  The token is NEVER written to log output.
+
+        If *post_clone_fn* is provided it is called with *target_path* after a
+        successful clone.  If *post_clone_fn* raises (or if the clone itself
+        fails), *target_path* is removed via ``shutil.rmtree`` before the
+        exception propagates, preventing orphaned temp directories.
         """
-        log = logger.bind(repo=repo_id, branch=branch)
+        repo_path = _validate_repo_url(repo_id)
+        log = logger.bind(repo=repo_path, branch=branch)
         log.info("git.clone.start")
 
         # Build authenticated URL — never pass this to structlog.
-        clone_url = f"https://x-access-token:{self._token}@github.com/{repo_id}.git"
+        clone_url = f"https://x-access-token:{self._token}@github.com/{repo_path}.git"
 
-        if sparse_paths:
-            result: subprocess.CompletedProcess[str] = subprocess.run(
-                [
-                    "git", "clone",
-                    "--filter=blob:none", "--sparse",
-                    "--branch", branch,
-                    clone_url, target_path,
-                ],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                raise TransientError(
-                    f"Failed to clone {repo_id} (branch={branch}): git exited {result.returncode}"
+        try:
+            if sparse_paths:
+                result: subprocess.CompletedProcess[str] = subprocess.run(
+                    [
+                        "git", "clone",
+                        "--filter=blob:none", "--sparse",
+                        "--branch", branch,
+                        clone_url, target_path,
+                    ],
+                    capture_output=True,
+                    text=True,
                 )
-            sparse_result: subprocess.CompletedProcess[str] = subprocess.run(
-                ["git", "sparse-checkout", "set", *sparse_paths],
-                capture_output=True,
-                text=True,
-                cwd=target_path,
-            )
-            if sparse_result.returncode != 0:
-                raise TransientError(
-                    f"Failed to configure sparse checkout for {repo_id}: "
-                    f"git exited {sparse_result.returncode}"
+                if result.returncode != 0:
+                    raise TransientError(
+                        f"Failed to clone {repo_path} (branch={branch}): "
+                        f"git exited {result.returncode}"
+                    )
+                sparse_result: subprocess.CompletedProcess[str] = subprocess.run(
+                    ["git", "sparse-checkout", "set", *sparse_paths],
+                    capture_output=True,
+                    text=True,
+                    cwd=target_path,
                 )
-        else:
-            result = subprocess.run(
-                ["git", "clone", "--branch", branch, clone_url, target_path],
-                capture_output=True,
-                text=True,
-            )
-            if result.returncode != 0:
-                raise TransientError(
-                    f"Failed to clone {repo_id} (branch={branch}): git exited {result.returncode}"
+                if sparse_result.returncode != 0:
+                    raise TransientError(
+                        f"Failed to configure sparse checkout for {repo_path}: "
+                        f"git exited {sparse_result.returncode}"
+                    )
+            else:
+                result = subprocess.run(
+                    ["git", "clone", "--branch", branch, clone_url, target_path],
+                    capture_output=True,
+                    text=True,
                 )
+                if result.returncode != 0:
+                    raise TransientError(
+                        f"Failed to clone {repo_path} (branch={branch}): "
+                        f"git exited {result.returncode}"
+                    )
+
+            if post_clone_fn is not None:
+                post_clone_fn(target_path)
+
+        except Exception:
+            shutil.rmtree(target_path, ignore_errors=True)
+            raise
 
         log.info("git.clone.done")
         return target_path

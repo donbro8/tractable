@@ -160,6 +160,126 @@ async def test_clone_token_not_in_log_output(
     assert "ghp_testtoken1234567890" not in err
 
 
+# ── clone: URL validation and credential injection (TASK-2.2.2) ──────────────
+
+
+@pytest.mark.asyncio
+async def test_clone_full_url_injects_token_in_subprocess(
+    provider: GitHubProvider,
+    tmp_path: pathlib.Path,
+) -> None:
+    """AC-1: Full HTTPS URL → subprocess receives x-access-token credential; token not in logs."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        with structlog.testing.capture_logs() as cap_logs:
+            await provider.clone("https://github.com/org/repo.git", str(tmp_path))
+
+    call_args: list[str] = mock_run.call_args[0][0]
+    clone_url = next((a for a in call_args if "github.com" in a), "")
+    assert "x-access-token:ghp_testtoken1234567890@github.com" in clone_url
+
+    # Token must not appear in any structlog output.
+    for entry in cap_logs:
+        for v in entry.values():
+            assert "ghp_testtoken1234567890" not in str(v)
+
+
+@pytest.mark.asyncio
+async def test_clone_shell_metacharacters_raise_governance_error(
+    provider: GitHubProvider,
+    tmp_path: pathlib.Path,
+) -> None:
+    """AC-2: URL with shell metacharacters raises GovernanceError before subprocess."""
+    with patch("subprocess.run") as mock_run:
+        with pytest.raises(GovernanceError, match="invalid characters"):
+            await provider.clone(
+                "https://github.com/org/repo.git; rm -rf /", str(tmp_path)
+            )
+    mock_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_clone_http_scheme_raises_governance_error(
+    provider: GitHubProvider,
+    tmp_path: pathlib.Path,
+) -> None:
+    """AC-3: HTTP (non-HTTPS) URL raises GovernanceError."""
+    with patch("subprocess.run") as mock_run:
+        with pytest.raises(GovernanceError, match="scheme must be 'https'"):
+            await provider.clone("http://github.com/org/repo.git", str(tmp_path))
+    mock_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_clone_disallowed_host_raises_governance_error(
+    provider: GitHubProvider,
+    tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AC-4: Host not in allowlist raises GovernanceError."""
+    monkeypatch.delenv("TRACTABLE_ALLOWED_GIT_HOSTS", raising=False)
+    with patch("subprocess.run") as mock_run:
+        with pytest.raises(GovernanceError, match="not in the allowed list"):
+            await provider.clone(
+                "https://evil.example.com/org/repo.git", str(tmp_path)
+            )
+    mock_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_clone_cleanup_on_post_clone_fn_failure(
+    provider: GitHubProvider,
+    tmp_path: pathlib.Path,
+) -> None:
+    """AC-5: Successful clone + post_clone_fn raises → target directory deleted."""
+
+    def parse_file(path: str) -> None:
+        raise RuntimeError("parse_file failed")
+
+    clone_dir = tmp_path / "cloned"
+    clone_dir.mkdir()
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        with pytest.raises(RuntimeError, match="parse_file failed"):
+            await provider.clone(
+                "owner/repo",
+                str(clone_dir),
+                post_clone_fn=parse_file,
+            )
+
+    assert not clone_dir.exists(), "Cloned directory must be deleted on post-clone failure"
+
+
+@pytest.mark.asyncio
+async def test_clone_cleanup_on_clone_failure(
+    provider: GitHubProvider,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Partial clone dir is removed when subprocess returns non-zero."""
+    clone_dir = tmp_path / "partial"
+    clone_dir.mkdir()
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stderr="auth fail")
+        with pytest.raises(TransientError):
+            await provider.clone("owner/repo", str(clone_dir))
+
+    assert not clone_dir.exists()
+
+
+@pytest.mark.asyncio
+async def test_clone_shorthand_id_still_works(
+    provider: GitHubProvider,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Shorthand 'org/repo' format continues to work after URL validation added."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        result = await provider.clone("owner/repo", str(tmp_path))
+    assert result == str(tmp_path)
+
+
 # ── get_file_content ─────────────────────────────────────────────────────────
 
 
