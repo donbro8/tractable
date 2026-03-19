@@ -1,0 +1,84 @@
+"""EXECUTING node — second node in the agent workflow.
+
+TASK-2.3.1: Saves a checkpoint with phase=EXECUTING, then invokes tools
+(mocked in this milestone) to implement each plan step.  Real tool
+implementations are substituted in Milestone 2.4.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
+
+import structlog
+
+from tractable.types.agent import AgentCheckpoint
+from tractable.types.enums import TaskPhase
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
+
+    from tractable.agent.state import AgentWorkflowState
+    from tractable.protocols.agent_state_store import AgentStateStore
+    from tractable.protocols.tool import Tool
+
+_log = structlog.get_logger()
+
+# ── Public factory ─────────────────────────────────────────────────────────
+
+
+def make_executing_node(
+    tools: dict[str, Tool],
+    state_store: AgentStateStore,
+) -> Callable[[AgentWorkflowState], Coroutine[Any, Any, dict[str, Any]]]:
+    """Return an async EXECUTING node with injected dependencies.
+
+    Parameters
+    ----------
+    tools:
+        Tool name → Tool mapping; injected at workflow construction time.
+    state_store:
+        Used to persist the EXECUTING-phase checkpoint.
+    """
+
+    async def executing_node(state: AgentWorkflowState) -> dict[str, Any]:
+        agent_id = state["agent_id"]
+        task_id = state["task_id"]
+
+        checkpoint = AgentCheckpoint(
+            task_id=task_id,
+            phase=TaskPhase.EXECUTING,
+            progress_summary="Entering EXECUTING node",
+            files_modified=list(state["files_changed"]),
+            pending_actions=list(state["plan"]),
+            conversation_summary="",
+            token_usage=state["token_count"],
+            created_at=datetime.now(tz=UTC),
+        )
+        await state_store.save_checkpoint(agent_id, task_id, checkpoint)
+        _log.info(
+            "checkpoint_saved",
+            agent_id=agent_id,
+            task_id=task_id,
+            phase=TaskPhase.EXECUTING,
+        )
+
+        # Iterate through plan steps, invoking tools for each.
+        # In this milestone, tools dict may be empty (all mocked).
+        files_changed: list[str] = list(state["files_changed"])
+
+        for step in state["plan"]:
+            if "code_editor" in tools:
+                result = await tools["code_editor"].invoke(
+                    {"action": "write", "step": step}
+                )
+                if result.success and result.output:
+                    files_changed.append(str(result.output))
+
+        return {
+            "phase": TaskPhase.REVIEWING,
+            "files_changed": files_changed,
+            "error": None,
+        }
+
+    return executing_node

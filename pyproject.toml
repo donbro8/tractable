@@ -56,6 +56,10 @@ pythonVersion = "3.11"
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "strict"
+# langgraph ships py.typed but pyright 1.1.x treats some re-export submodules
+# as partially typed.  Disable the stub-missing diagnostic globally; our own
+# code remains fully checked under strict mode.
+reportMissingTypeStubs = false
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
