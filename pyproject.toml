@@ -41,7 +41,7 @@ dev = [
 ]
 
 [project.scripts]
-tractable = "tractable.cli:app"
+tractable = "tractable.cli.main:main"
 
 [tool.ruff]
 line-length = 100
