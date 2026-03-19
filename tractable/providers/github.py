@@ -325,6 +325,8 @@ class GitHubProvider:
             check_resp = await client.get(f"/repos/{repo_id}/git/refs/heads/{branch_name}")
             if check_resp.status_code == 200:
                 raise RecoverableError(f"Branch already exists: {branch_name}")
+            elif check_resp.status_code != 404:
+                self._handle_response_errors(check_resp, f"check branch {branch_name} in {repo_id}")
 
             ref_resp = await client.get(f"/repos/{repo_id}/git/refs/heads/{from_ref}")
             self._handle_response_errors(ref_resp, f"get {from_ref} for {repo_id}")
@@ -337,7 +339,14 @@ class GitHubProvider:
                 json={"ref": f"refs/heads/{branch_name}", "sha": from_sha},
             )
             self._handle_response_errors(create_resp, f"create branch {branch_name} in {repo_id}")
-            return str(create_resp.json().get("object", {}).get("sha", ""))
+            sha = str(create_resp.json().get("object", {}).get("sha", ""))
+            logger.info(
+                "branch_created",
+                repo=repo_id,
+                branch_name=branch_name,
+                sha=sha,
+            )
+            return sha
 
     async def create_pull_request(
         self,

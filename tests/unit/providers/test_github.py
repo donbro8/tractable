@@ -19,6 +19,8 @@ import httpx
 import pytest
 import respx
 
+import structlog.testing
+
 from tractable.errors import FatalError, GovernanceError, RecoverableError, TransientError
 from tractable.protocols.git_provider import GitProvider
 from tractable.providers.factory import create_git_provider
@@ -427,6 +429,160 @@ async def test_merge_pull_request_blocked(provider: GitHubProvider) -> None:
     
     with pytest.raises(GovernanceError, match="blocked by unmet review"):
         await provider.merge_pull_request("owner/repo", pr)
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_branch_rate_limit_raises_transient_error(
+    provider: GitHubProvider,
+) -> None:
+    """create_branch 429 raises TransientError with retry_after from header."""
+    respx.get("https://api.github.com/repos/owner/repo/git/refs/heads/feature/x").mock(
+        return_value=httpx.Response(
+            429,
+            headers={"Retry-After": "20"},
+            json={"message": "rate limit"},
+        )
+    )
+    with pytest.raises(TransientError) as exc_info:
+        await provider.create_branch("owner/repo", "feature/x")
+    assert exc_info.value.retry_after == 20
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pull_request_rate_limit_raises_transient_error(
+    provider: GitHubProvider,
+) -> None:
+    """create_pull_request 429 raises TransientError with retry_after from header."""
+    respx.post("https://api.github.com/repos/owner/repo/pulls").mock(
+        return_value=httpx.Response(
+            429,
+            headers={"Retry-After": "35"},
+            json={"message": "rate limit"},
+        )
+    )
+    with pytest.raises(TransientError) as exc_info:
+        await provider.create_pull_request("owner/repo", "Title", "Body", "feature/x")
+    assert exc_info.value.retry_after == 35
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_merge_pull_request_rate_limit_raises_transient_error(
+    provider: GitHubProvider,
+) -> None:
+    """merge_pull_request 429 (on PR fetch) raises TransientError with retry_after."""
+    from tractable.types.git import PullRequestHandle
+
+    pr = PullRequestHandle(
+        provider="github",
+        repo_id="owner/repo",
+        pr_number=42,
+        url="https://github.com/owner/repo/pull/42",
+        head_branch="feature/x",
+        base_branch="main",
+    )
+    respx.get("https://api.github.com/repos/owner/repo/pulls/42").mock(
+        return_value=httpx.Response(
+            429,
+            headers={"Retry-After": "10"},
+            json={"message": "rate limit"},
+        )
+    )
+    with pytest.raises(TransientError) as exc_info:
+        await provider.merge_pull_request("owner/repo", pr)
+    assert exc_info.value.retry_after == 10
+
+
+# ── Structlog output tests ────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_branch_logs_info(provider: GitHubProvider) -> None:
+    """create_branch emits a structlog entry at info level with repo and branch_name."""
+    respx.get("https://api.github.com/repos/owner/repo/git/refs/heads/feature/x").mock(
+        return_value=httpx.Response(404)
+    )
+    respx.get("https://api.github.com/repos/owner/repo/git/refs/heads/main").mock(
+        return_value=httpx.Response(200, json={"object": {"sha": "deadbeef"}})
+    )
+    respx.post("https://api.github.com/repos/owner/repo/git/refs").mock(
+        return_value=httpx.Response(201, json={"object": {"sha": "deadbeef"}})
+    )
+
+    with structlog.testing.capture_logs() as cap_logs:
+        await provider.create_branch("owner/repo", "feature/x", from_ref="main")
+
+    info_logs = [e for e in cap_logs if e.get("log_level") == "info" and e.get("event") == "branch_created"]
+    assert info_logs, f"Expected branch_created info log; got {cap_logs}"
+    entry = info_logs[0]
+    assert entry["repo"] == "owner/repo"
+    assert entry["branch_name"] == "feature/x"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_create_pull_request_logs_info(provider: GitHubProvider) -> None:
+    """create_pull_request emits pull_request_created at info with required fields."""
+    respx.post("https://api.github.com/repos/owner/repo/pulls").mock(
+        return_value=httpx.Response(
+            201,
+            json={"number": 7, "html_url": "https://github.com/owner/repo/pull/7"},
+        )
+    )
+
+    with structlog.testing.capture_logs() as cap_logs:
+        await provider.create_pull_request(
+            "owner/repo", "Fix bug", "Body text", "feature/fix", "main"
+        )
+
+    info_logs = [
+        e for e in cap_logs
+        if e.get("log_level") == "info" and e.get("event") == "pull_request_created"
+    ]
+    assert info_logs, f"Expected pull_request_created info log; got {cap_logs}"
+    entry = info_logs[0]
+    assert entry["repo"] == "owner/repo"
+    assert entry["pr_number"] == 7
+    assert entry["head_branch"] == "feature/fix"
+    assert entry["base_branch"] == "main"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_merge_pull_request_logs_info(provider: GitHubProvider) -> None:
+    """merge_pull_request emits pull_request_merged at info with required fields."""
+    from tractable.types.git import PullRequestHandle
+
+    pr = PullRequestHandle(
+        provider="github",
+        repo_id="owner/repo",
+        pr_number=99,
+        url="https://github.com/owner/repo/pull/99",
+        head_branch="feature/y",
+        base_branch="main",
+    )
+    respx.get("https://api.github.com/repos/owner/repo/pulls/99").mock(
+        return_value=httpx.Response(200, json={"mergeable_state": "clean"})
+    )
+    respx.put("https://api.github.com/repos/owner/repo/pulls/99/merge").mock(
+        return_value=httpx.Response(200, json={"merged": True, "sha": "abc000"})
+    )
+
+    with structlog.testing.capture_logs() as cap_logs:
+        await provider.merge_pull_request("owner/repo", pr, strategy="squash")
+
+    info_logs = [
+        e for e in cap_logs
+        if e.get("log_level") == "info" and e.get("event") == "pull_request_merged"
+    ]
+    assert info_logs, f"Expected pull_request_merged info log; got {cap_logs}"
+    entry = info_logs[0]
+    assert entry["repo"] == "owner/repo"
+    assert entry["pr_number"] == 99
+    assert entry["merge_method"] == "squash"
 
 
 @pytest.mark.asyncio
