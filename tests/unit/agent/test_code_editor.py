@@ -207,6 +207,33 @@ async def test_write_file_empty_allowed_paths_permits_all(tmp_path: Path) -> Non
     assert result.success is True
 
 
+# ── Security fix: prefix matching must not match sibling directories ──────────
+
+
+@pytest.mark.asyncio
+async def test_write_file_sibling_dir_not_matched_by_allowed_paths(tmp_path: Path) -> None:
+    """'src_extra/' must not be allowed when allowed_paths=['src/']."""
+    (tmp_path / "src_extra").mkdir()
+    tool = _make_tool(tmp_path, scope=AgentScope(allowed_paths=["src/"]))
+
+    with pytest.raises(GovernanceError):
+        await tool.invoke(
+            {"operation": "write_file", "path": "src_extra/file.py", "content": "x"}
+        )
+
+
+@pytest.mark.asyncio
+async def test_deny_path_sibling_dir_not_blocked(tmp_path: Path) -> None:
+    """'src_extra/' must not be blocked when deny_paths=['src/']."""
+    (tmp_path / "src_extra").mkdir()
+    tool = _make_tool(tmp_path, scope=AgentScope(deny_paths=["src/"]))
+
+    result = await tool.invoke(
+        {"operation": "write_file", "path": "src_extra/file.py", "content": "x"}
+    )
+    assert result.success is True
+
+
 # ── Additional coverage: AuditEntry appended on sensitive_path_blocked ────────
 
 

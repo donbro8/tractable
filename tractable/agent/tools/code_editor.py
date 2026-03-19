@@ -14,6 +14,7 @@ Sources:
 from __future__ import annotations
 
 import fnmatch
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,20 @@ from tractable.types.agent import AuditEntry
 from tractable.types.config import AgentScope, GovernancePolicy
 
 _log = structlog.get_logger()
+
+
+def _path_matches_prefix(resolved_str: str, prefix: str) -> bool:
+    """Return True if ``resolved_str`` equals ``prefix`` or is directly inside it.
+
+    A plain ``startswith`` check is insufficient because it would match
+    ``/repo/src_extra/file.py`` against the prefix ``/repo/src``.  We require
+    that the next character after ``prefix`` is the OS path separator (meaning
+    ``resolved_str`` is a child) or that the strings are equal (meaning
+    ``resolved_str`` IS the prefixed path itself).
+    """
+    if resolved_str == prefix:
+        return True
+    return resolved_str.startswith(prefix + os.sep)
 
 
 class CodeEditorTool:
@@ -149,7 +164,7 @@ class CodeEditorTool:
         if not resolved.is_dir():
             return ToolResult(success=False, error=f"Not a directory: {directory!r}")
 
-        paths = [str(p) for p in resolved.iterdir()]
+        paths = [str(p.relative_to(self._working_dir)) for p in resolved.iterdir()]
         return ToolResult(success=True, output=paths)
 
     # ── Enforcement helpers ─────────────────────────────────────────────────
@@ -185,7 +200,7 @@ class CodeEditorTool:
         resolved_str = str(resolved)
         for deny_pattern in self._scope.deny_paths:
             deny_resolved = str((self._working_dir / deny_pattern).resolve())
-            if resolved_str.startswith(deny_resolved) or fnmatch.fnmatch(
+            if _path_matches_prefix(resolved_str, deny_resolved) or fnmatch.fnmatch(
                 resolved_str, deny_resolved
             ):
                 self._emit_blocked_log(resolved_str, reason="deny_paths")
@@ -210,7 +225,7 @@ class CodeEditorTool:
         resolved_str = str(resolved)
         for allow_pattern in self._scope.allowed_paths:
             allow_resolved = str((self._working_dir / allow_pattern).resolve())
-            if resolved_str.startswith(allow_resolved):
+            if _path_matches_prefix(resolved_str, allow_resolved):
                 return
 
         self._emit_blocked_log(resolved_str, reason="outside_allowed_paths")
@@ -284,5 +299,13 @@ class CodeEditorTool:
             loop = asyncio.get_event_loop()
             loop.create_task(self._state_store.append_audit_entry(entry))
         except RuntimeError:
-            # No running event loop in test contexts that use synchronous code paths.
-            pass
+            # No running event loop — emit a critical log so the audit trail is
+            # never silently lost even if the store write cannot be scheduled.
+            _log.critical(
+                "audit_entry_lost",
+                agent_id=self._agent_id,
+                task_id=self._task_id,
+                action=action,
+                file_path=file_path,
+                reason="no_event_loop",
+            )
