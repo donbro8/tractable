@@ -23,7 +23,8 @@ from typing import Any
 import structlog
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.exc import IntegrityError, OperationalError, TimeoutError
+from sqlalchemy.exc import IntegrityError, OperationalError
+from sqlalchemy.exc import TimeoutError as _SQLTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tractable.errors import FatalError, RecoverableError, TransientError
@@ -44,7 +45,7 @@ async def _catch_db_errors() -> AsyncGenerator[None, None]:
         yield
     except OperationalError as exc:
         raise TransientError("Database connection lost or unreachable", retry_after=5) from exc
-    except TimeoutError as exc:
+    except (_SQLTimeoutError, TimeoutError) as exc:
         raise TransientError(
             "Database operation or pool acquisition timed out", retry_after=5
         ) from exc

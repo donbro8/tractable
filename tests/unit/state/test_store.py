@@ -147,6 +147,15 @@ class TestDbErrorMapping:
             await store.get_checkpoint("agent-1", "task-1")
 
     @pytest.mark.asyncio
+    async def test_transient_error_on_db_unreachable(self) -> None:
+        """AC-2: get_agent_context raises TransientError when DB is unreachable."""
+        from sqlalchemy.exc import OperationalError
+        store, mock_session = make_store()
+        mock_session.get = AsyncMock(side_effect=OperationalError("connect", "params", "orig"))
+        with pytest.raises(TransientError, match="unreachable"):
+            await store.get_agent_context("agent-1")
+
+    @pytest.mark.asyncio
     async def test_integrity_error_mapped_to_recoverable(self) -> None:
         from sqlalchemy.exc import IntegrityError
         store, mock_session = make_store()

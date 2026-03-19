@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import textwrap
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -92,6 +93,19 @@ def test_register_nonexistent_path_exits_1() -> None:
     assert result.exit_code == 1
     assert isinstance(result.exception, FatalError)
     assert "not found" in str(result.exception).lower() or "error" in str(result.exception).lower()
+
+
+# AC-4: subprocess test — exit code 1, human-readable stderr, no Python traceback
+def test_register_nonexistent_path_subprocess_no_traceback() -> None:
+    """FatalError exits with code 1 and a human-readable message; no traceback."""
+    proc = subprocess.run(
+        ["tractable", "register", "nonexistent_config.py"],
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 1
+    assert "Traceback" not in proc.stderr
+    assert proc.stderr.strip() != ""
 
 
 # AC-4: Pydantic validation error → exit code 1
