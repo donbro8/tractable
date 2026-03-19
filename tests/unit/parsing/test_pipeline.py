@@ -14,6 +14,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tractable.errors import FatalError
+
 from tractable.parsing.pipeline import GraphConstructionPipeline, IngestResult
 from tractable.types.config import GitProviderConfig, RepositoryRegistration
 from tractable.types.enums import ChangeSource
@@ -384,3 +386,110 @@ async def test_change_source_is_initial_ingestion(
             await pipeline.ingest_repository(registration, graph)
 
     assert all(s == ChangeSource.INITIAL_INGESTION for s in captured_sources)
+
+
+# ── TASK-2.1.3: Error taxonomy tests ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_partial_parse_failure_is_recoverable(
+    pipeline: GraphConstructionPipeline,
+) -> None:
+    """AC-4: One file fails to parse; rest succeed. Errors list populated."""
+    with tempfile.TemporaryDirectory() as tmp:
+        _create_python_files(tmp, count=3)
+        bad = Path(tmp) / "bad_file.py"
+        bad.write_text("x = 1\n", encoding="utf-8")
+
+        registration = _make_registration(tmp)
+        graph = _make_mock_graph()
+
+        original_read_bytes = Path.read_bytes
+
+        def _patched_read_bytes(self: Path) -> bytes:
+            if self.name == "bad_file.py":
+                raise OSError("simulated read failure")
+            return original_read_bytes(self)
+
+        with (
+            patch("tractable.parsing.pipeline.create_git_provider") as mock_factory,
+            patch.object(Path, "read_bytes", _patched_read_bytes),
+        ):
+            mock_provider = MagicMock()
+            mock_provider.clone = _make_clone_mock(tmp)
+            mock_factory.return_value = mock_provider
+
+            result = await pipeline.ingest_repository(registration, graph)
+
+    # 3 good files parsed, 1 error accumulated
+    assert result.files_parsed == 3
+    assert len(result.errors) == 1
+    assert "bad_file.py" in result.errors[0]
+
+
+@pytest.mark.asyncio
+async def test_fatal_error_on_zero_files_parsed(
+    pipeline: GraphConstructionPipeline,
+) -> None:
+    """All parseable files fail → FatalError."""
+    with tempfile.TemporaryDirectory() as tmp:
+        # Create only one Python file and make it fail to read
+        bad = Path(tmp) / "only_file.py"
+        bad.write_text("x = 1\n", encoding="utf-8")
+
+        registration = _make_registration(tmp)
+        graph = _make_mock_graph()
+
+        original_read_bytes = Path.read_bytes
+
+        def _patched_read_bytes(self: Path) -> bytes:
+            if self.name == "only_file.py":
+                raise OSError("simulated read failure")
+            return original_read_bytes(self)
+
+        with (
+            patch("tractable.parsing.pipeline.create_git_provider") as mock_factory,
+            patch.object(Path, "read_bytes", _patched_read_bytes),
+        ):
+            mock_provider = MagicMock()
+            mock_provider.clone = _make_clone_mock(tmp)
+            mock_factory.return_value = mock_provider
+
+            with pytest.raises(FatalError, match="zero parsed files"):
+                await pipeline.ingest_repository(registration, graph)
+
+
+@pytest.mark.asyncio
+async def test_file_parsed_structlog_event(
+    pipeline: GraphConstructionPipeline,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    """Each successfully parsed file emits a structlog file_parsed event."""
+    from tractable.logging import configure_logging
+
+    configure_logging(env="production")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        _create_python_files(tmp, count=2)
+        registration = _make_registration(tmp)
+        graph = _make_mock_graph()
+
+        with patch("tractable.parsing.pipeline.create_git_provider") as mock_factory:
+            mock_provider = MagicMock()
+            mock_provider.clone = _make_clone_mock(tmp)
+            mock_factory.return_value = mock_provider
+
+            await pipeline.ingest_repository(registration, graph)
+
+    out, _ = capfd.readouterr()
+    lines = out.strip().split("\n")
+
+    # Find lines that contain the file_parsed event
+    file_parsed_lines = [ln for ln in lines if "file_parsed" in ln]
+    assert len(file_parsed_lines) == 2, (
+        f"Expected 2 file_parsed events, found {len(file_parsed_lines)}"
+    )
+
+    for ln in file_parsed_lines:
+        assert "entity_count" in ln
+        assert "file_path" in ln

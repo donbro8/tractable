@@ -19,7 +19,7 @@ import httpx
 import pytest
 import respx
 
-from tractable.errors import RecoverableError, TransientError
+from tractable.errors import FatalError, RecoverableError, TransientError
 from tractable.protocols.git_provider import GitProvider
 from tractable.providers.factory import create_git_provider
 from tractable.providers.github import GitHubProvider
@@ -68,7 +68,7 @@ def test_missing_credentials_raises_at_construction(
 ) -> None:
     """A missing credentials env var must raise at construction, not at first call."""
     monkeypatch.delenv("TEST_GITHUB_TOKEN", raising=False)
-    with pytest.raises(OSError, match="TEST_GITHUB_TOKEN"):
+    with pytest.raises(FatalError, match="TEST_GITHUB_TOKEN"):
         GitHubProvider(github_config)
 
 
@@ -83,7 +83,7 @@ def test_default_constructor_raises_when_github_token_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    with pytest.raises(OSError, match="GITHUB_TOKEN"):
+    with pytest.raises(FatalError, match="GITHUB_TOKEN"):
         GitHubProvider()
 
 
@@ -138,7 +138,7 @@ async def test_clone_failure_raises_recoverable_error(
 ) -> None:
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=128, stderr="not found")
-        with pytest.raises(RecoverableError, match="owner/repo"):
+        with pytest.raises(TransientError, match="owner/repo"):
             await provider.clone("owner/repo", str(tmp_path))
 
 
@@ -318,13 +318,13 @@ async def test_get_commit_history_with_path_filter(provider: GitHubProvider) -> 
 
 @pytest.mark.asyncio
 async def test_create_branch_not_implemented(provider: GitHubProvider) -> None:
-    with pytest.raises(NotImplementedError, match="Phase 2"):
+    with pytest.raises(RecoverableError, match="Phase 2"):
         await provider.create_branch("owner/repo", "feature/x")
 
 
 @pytest.mark.asyncio
 async def test_create_pull_request_not_implemented(provider: GitHubProvider) -> None:
-    with pytest.raises(NotImplementedError, match="Phase 2"):
+    with pytest.raises(RecoverableError, match="Phase 2"):
         await provider.create_pull_request("owner/repo", "title", "body", "feature/x")
 
 
@@ -340,7 +340,7 @@ async def test_merge_pull_request_not_implemented(provider: GitHubProvider) -> N
         head_branch="feature/x",
         base_branch="main",
     )
-    with pytest.raises(NotImplementedError, match="Phase 2"):
+    with pytest.raises(RecoverableError, match="Phase 2"):
         await provider.merge_pull_request("owner/repo", pr)
 
 
@@ -348,7 +348,7 @@ async def test_merge_pull_request_not_implemented(provider: GitHubProvider) -> N
 async def test_set_branch_protection_not_implemented(provider: GitHubProvider) -> None:
     from tractable.types.git import BranchProtectionRules
 
-    with pytest.raises(NotImplementedError, match="Phase 2"):
+    with pytest.raises(RecoverableError, match="Phase 2"):
         await provider.set_branch_protection("owner/repo", "main", BranchProtectionRules())
 
 
@@ -371,8 +371,77 @@ def test_factory_raises_for_unsupported_provider() -> None:
         provider_type="gitlab",
         credentials_secret_ref="GITLAB_TOKEN",
     )
-    with pytest.raises(NotImplementedError, match="gitlab"):
+    with pytest.raises(RecoverableError, match="gitlab"):
         create_git_provider(config)
+
+
+# ── HTTP error mapping ────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_handle_response_errors_401_fatal(provider: GitHubProvider) -> None:
+    """GitHub 401 (invalid credentials) raises FatalError."""
+    respx.get("https://api.github.com/repos/owner/repo/contents/README.md").mock(
+        return_value=httpx.Response(401, json={"message": "Bad credentials"})
+    )
+
+    with pytest.raises(FatalError, match="authentication failed"):
+        await provider.get_file_content("owner/repo", "README.md")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_handle_response_errors_429_transient(provider: GitHubProvider) -> None:
+    """GitHub 429 (rate limit) raises TransientError with retry_after."""
+    respx.get("https://api.github.com/repos/owner/repo/contents/README.md").mock(
+        return_value=httpx.Response(
+            429,
+            headers={"Retry-After": "45"},
+            json={"message": "rate limit"},
+        )
+    )
+
+    with pytest.raises(TransientError) as exc_info:
+        await provider.get_file_content("owner/repo", "README.md")
+
+    assert exc_info.value.retry_after == 45
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_handle_response_errors_500_transient(provider: GitHubProvider) -> None:
+    """GitHub 500 (server error) raises TransientError."""
+    respx.get("https://api.github.com/repos/owner/repo/contents/README.md").mock(
+        return_value=httpx.Response(500, json={"message": "Internal Server Error"})
+    )
+
+    with pytest.raises(TransientError, match="server error 500"):
+        await provider.get_file_content("owner/repo", "README.md")
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_handle_response_errors_503_transient(provider: GitHubProvider) -> None:
+    """GitHub 503 (service unavailable) raises TransientError."""
+    respx.get("https://api.github.com/repos/owner/repo/contents/README.md").mock(
+        return_value=httpx.Response(503, json={"message": "Service Unavailable"})
+    )
+
+    with pytest.raises(TransientError, match="server error 503"):
+        await provider.get_file_content("owner/repo", "README.md")
+
+
+@pytest.mark.asyncio
+async def test_clone_transient_error_on_nonzero_exit(
+    provider: GitHubProvider,
+    tmp_path: pathlib.Path,
+) -> None:
+    """AC-2: subprocess exit code 128 (git clone failure) raises TransientError."""
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=128, stderr="fatal: not found")
+        with pytest.raises(TransientError, match="git exited 128"):
+            await provider.clone("owner/repo", str(tmp_path))
 
 
 # ── Integration tests (skipped in unit test runs) ─────────────────────────────

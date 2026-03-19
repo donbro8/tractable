@@ -2,9 +2,15 @@
 
 Implements read operations only (Phase 1). Write operations
 (create_branch, create_pull_request, merge_pull_request, set_branch_protection)
-are defined as stubs that raise NotImplementedError.
+are defined as stubs that raise RecoverableError.
 
 Uses httpx for GitHub REST API calls and git subprocess for cloning.
+
+All errors follow the four-class taxonomy from ``tractable.errors``:
+- 401/403 authentication → FatalError
+- 429 / 5xx → TransientError
+- 404 → RecoverableError
+- subprocess clone failure → TransientError
 
 Source: tech-spec.py §2.1 — GitProvider Protocol
 """
@@ -21,7 +27,7 @@ from typing import Any, Literal, cast
 import httpx
 import structlog
 
-from tractable.errors import RecoverableError, TransientError
+from tractable.errors import FatalError, RecoverableError, TransientError
 from tractable.types.config import GitProviderConfig
 from tractable.types.git import (
     BranchProtectionRules,
@@ -58,7 +64,11 @@ class GitHubProvider:
         cred_var = config.credentials_secret_ref
         token = os.environ.get(cred_var)
         if token is None:
-            raise OSError(
+            logger.error(
+                "github.auth_failure",
+                credential_var=cred_var,
+            )
+            raise FatalError(
                 f"GitHub credentials not found: environment variable '{cred_var}' is not set. "
                 "Set this variable to a GitHub personal access token with 'repo' scope."
             )
@@ -78,15 +88,53 @@ class GitHubProvider:
         return httpx.AsyncClient(base_url=self._base_url, headers=self._headers)
 
     def _handle_response_errors(self, response: httpx.Response, context: str) -> None:
-        """Convert GitHub HTTP error codes to domain errors."""
-        if response.status_code == 403:
+        """Convert GitHub HTTP error codes to domain errors.
+
+        Mapping:
+        - 401      → FatalError  (invalid credentials, cannot recover)
+        - 403, 429 → TransientError  (rate limit, retry after delay)
+        - 404      → RecoverableError  (resource not found)
+        - 500, 503 → TransientError  (server error, retryable)
+        """
+        status = response.status_code
+
+        if status == 401:
+            logger.error(
+                "github.auth_invalid",
+                context=context,
+                status=status,
+            )
+            raise FatalError(
+                f"GitHub API authentication failed ({context}): "
+                "token is invalid or lacks required scopes"
+            )
+
+        if status in (403, 429):
             retry_after = int(response.headers.get("Retry-After", "60"))
+            logger.warning(
+                "github.rate_limit",
+                context=context,
+                status=status,
+                retry_after=retry_after,
+            )
             raise TransientError(
                 f"GitHub API rate limit exceeded ({context})",
                 retry_after=retry_after,
             )
-        if response.status_code == 404:
+
+        if status == 404:
             raise RecoverableError(f"GitHub resource not found: {context}")
+
+        if status in (500, 503):
+            logger.warning(
+                "github.server_error",
+                context=context,
+                status=status,
+            )
+            raise TransientError(
+                f"GitHub API server error {status} ({context})"
+            )
+
         response.raise_for_status()
 
     # ── Read operations ───────────────────────────────────────────────────
@@ -120,7 +168,7 @@ class GitHubProvider:
                 text=True,
             )
             if result.returncode != 0:
-                raise RecoverableError(
+                raise TransientError(
                     f"Failed to clone {repo_id} (branch={branch}): git exited {result.returncode}"
                 )
             sparse_result: subprocess.CompletedProcess[str] = subprocess.run(
@@ -130,7 +178,7 @@ class GitHubProvider:
                 cwd=target_path,
             )
             if sparse_result.returncode != 0:
-                raise RecoverableError(
+                raise TransientError(
                     f"Failed to configure sparse checkout for {repo_id}: "
                     f"git exited {sparse_result.returncode}"
                 )
@@ -141,7 +189,7 @@ class GitHubProvider:
                 text=True,
             )
             if result.returncode != 0:
-                raise RecoverableError(
+                raise TransientError(
                     f"Failed to clone {repo_id} (branch={branch}): git exited {result.returncode}"
                 )
 
@@ -273,7 +321,7 @@ class GitHubProvider:
         branch_name: str,
         from_ref: str = "main",
     ) -> str:
-        raise NotImplementedError("Implemented in Phase 2")
+        raise RecoverableError("create_branch not yet implemented (Phase 2)")
 
     async def create_pull_request(
         self,
@@ -285,7 +333,7 @@ class GitHubProvider:
         reviewers: Sequence[str] | None = None,
         labels: Sequence[str] | None = None,
     ) -> PullRequestHandle:
-        raise NotImplementedError("Implemented in Phase 2")
+        raise RecoverableError("create_pull_request not yet implemented (Phase 2)")
 
     async def merge_pull_request(
         self,
@@ -293,7 +341,7 @@ class GitHubProvider:
         pr_handle: PullRequestHandle,
         strategy: Literal["merge", "squash", "rebase"] = "squash",
     ) -> MergeResult:
-        raise NotImplementedError("Implemented in Phase 2")
+        raise RecoverableError("merge_pull_request not yet implemented (Phase 2)")
 
     async def set_branch_protection(
         self,
@@ -301,4 +349,4 @@ class GitHubProvider:
         branch: str,
         rules: BranchProtectionRules,
     ) -> None:
-        raise NotImplementedError("Implemented in Phase 2")
+        raise RecoverableError("set_branch_protection not yet implemented (Phase 2)")

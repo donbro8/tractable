@@ -19,6 +19,7 @@ from typing import Any
 import structlog
 from pydantic import BaseModel, Field
 
+from tractable.errors import FatalError
 from tractable.parsing.parsers.python_parser import PythonParser
 from tractable.protocols.code_graph import TemporalCodeGraph
 from tractable.protocols.graph_construction import CodeParser, ParsedEntity, ParsedRelationship
@@ -249,6 +250,13 @@ class GraphConstructionPipeline:
 
                 unresolved_count += len(result.unresolved_references)
 
+                log.info(
+                    "file_parsed",
+                    repo=registration.name,
+                    file_path=rel_path,
+                    entity_count=len(result.entities),
+                )
+
             # Step 7: Apply mutations in batches of _BATCH_SIZE.
             for i in range(0, max(len(all_mutations), 1), _BATCH_SIZE):
                 batch = all_mutations[i : i + _BATCH_SIZE]
@@ -259,6 +267,13 @@ class GraphConstructionPipeline:
                     change_source=ChangeSource.INITIAL_INGESTION,
                     commit_sha=head_sha,
                 )
+
+        # Raise FatalError if no files were parsed from parseable candidates.
+        if files_parsed == 0 and errors:
+            raise FatalError(
+                f"Pipeline produced zero parsed files for repo '{registration.name}': "
+                f"{len(errors)} file(s) failed to parse"
+            )
 
         duration = time.monotonic() - t_start
         log.info(
