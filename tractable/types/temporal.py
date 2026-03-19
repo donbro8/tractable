@@ -206,3 +206,25 @@ class ChangeNotification(BaseModel):
     cross_repo_edges_affected: list[str] = Field(default_factory=list)
     commit_sha: str
     requires_action: bool
+
+
+class AgentReactivityConfig(BaseModel):
+    """Controls how an agent responds to real-time changes (realtime-temporal-spec.py §D)."""
+
+    wake_on_direct_change: bool = True
+    wake_on_dependency_change: bool = True
+    wake_on_consumer_change: bool = False
+    wake_on_transitive_change: bool = False
+    debounce_seconds: int = 30
+    batch_changes: bool = True
+    auto_pull_on_change: bool = True
+
+
+class SyncResult(BaseModel):
+    """Result of a repo sync operation (realtime-temporal-spec.py §D)."""
+
+    success: bool
+    strategy_used: str  # "pull" | "rebase" | "merge" | "abort"
+    conflicts: list[str] = Field(default_factory=list)
+    files_updated: int
+    new_head_sha: str | None = None
