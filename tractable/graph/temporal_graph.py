@@ -1,13 +1,13 @@
 """FalkorDB implementation of the TemporalCodeGraph protocol.
 
-Implements current-state operations and apply_mutations (TASK-1.4.2).
-Temporal query methods (get_changes_since, get_entity_history, etc.)
-are stubbed here and implemented in TASK-1.4.3.
+Implements current-state operations (TASK-1.4.2) and temporal/change-awareness
+query methods (TASK-1.4.3).
 
 Sources:
 - realtime-temporal-spec.py §B — TemporalCodeGraph Protocol (lines 144–264)
 - realtime-temporal-spec.py §A — temporal mutation patterns (lines 827–843)
-- realtime-temporal-spec.py §H — PHASE 1 additions, mutation logic (lines 927–930)
+- realtime-temporal-spec.py §F — agent catchup query example (lines 846–860)
+- realtime-temporal-spec.py §H — index strategy, PHASE 1 additions (lines 927–930)
 """
 
 from __future__ import annotations
@@ -22,11 +22,24 @@ from tractable.types.enums import ChangeRisk, ChangeSource
 from tractable.types.graph import GraphEntity, ImpactReport
 from tractable.types.temporal import (
     ChangeSet,
+    EntityModification,
     GraphDiff,
     TemporalGraphEntity,
     TemporalMetadata,
     TemporalMutation,
     TemporalMutationResult,
+)
+
+# ── Shared Cypher return clause for entity properties ─────────────────────────
+
+_ENTITY_RETURN = (
+    "e.id AS id, e.version_id AS version_id, e.kind AS kind, "
+    "e.name AS name, e.qualified_name AS qualified_name, "
+    "e.repo AS repo, e.file_path AS file_path, "
+    "e.valid_from AS valid_from, e.valid_until AS valid_until, "
+    "e.observed_at AS observed_at, e.change_source AS change_source, "
+    "e.commit_sha AS commit_sha, e.agent_id AS agent_id, "
+    "e.superseded_by AS superseded_by"
 )
 
 # ── Module-level helpers ──────────────────────────────────────────────────────
@@ -84,6 +97,41 @@ def _row_to_entity(row: dict[str, Any]) -> TemporalGraphEntity:
     )
 
 
+def _inject_at_filter(cypher: str, at_str: str) -> str:  # noqa: ARG001
+    """Inject a point-in-time validity filter into a Cypher query.
+
+    Replaces ``WHERE e.valid_until IS NULL`` (if present) or inserts before
+    RETURN.  The ``__at`` parameter must be passed when executing the query.
+    """
+    temporal_cond = "e.valid_from <= $__at AND (e.valid_until IS NULL OR e.valid_until > $__at)"
+    upper = cypher.upper()
+
+    # Replace an existing current-state filter if present
+    current_filter = "E.VALID_UNTIL IS NULL"
+    if current_filter in upper:
+        idx = upper.index(current_filter)
+        return cypher[:idx] + temporal_cond + cypher[idx + len(current_filter):]
+
+    where_pos = upper.find(" WHERE ")
+    return_pos = upper.find(" RETURN ")
+
+    if where_pos != -1 and (return_pos == -1 or where_pos < return_pos):
+        insert = where_pos + len(" WHERE ")
+        return cypher[:insert] + temporal_cond + " AND " + cypher[insert:]
+    if return_pos != -1:
+        return cypher[:return_pos] + f" WHERE {temporal_cond}" + cypher[return_pos:]
+    return cypher + f" WHERE {temporal_cond}"
+
+
+def _compute_changed_fields(
+    prev: TemporalGraphEntity, curr: TemporalGraphEntity
+) -> list[str]:
+    """Return a list of field names that differ between two entity versions."""
+    scalar_fields = ["kind", "name", "qualified_name", "repo", "file_path",
+                     "line_start", "line_end"]
+    return [f for f in scalar_fields if getattr(prev, f) != getattr(curr, f)]
+
+
 # ── FalkorDBTemporalGraph ─────────────────────────────────────────────────────
 
 
@@ -91,8 +139,9 @@ class FalkorDBTemporalGraph:
     """FalkorDB-backed implementation of the TemporalCodeGraph protocol.
 
     Current-state queries (``valid_until IS NULL``) are the fast path used by
-    agents during normal operation. Temporal/change-awareness methods are
-    implemented in TASK-1.4.3 and currently raise ``NotImplementedError``.
+    agents during normal operation. Temporal/change-awareness methods use the
+    ``(observed_at)`` and ``(id, valid_from)`` indexes for efficient time-travel
+    and change detection (realtime-temporal-spec.py §H).
     """
 
     def __init__(self, client: FalkorDBClient) -> None:
@@ -119,15 +168,7 @@ class FalkorDBTemporalGraph:
     ) -> TemporalGraphEntity | None:
         """Return the current (live) version of an entity, or ``None``."""
         rows = await self._client.execute(
-            "MATCH (e:Entity {id: $id}) "
-            "WHERE e.valid_until IS NULL "
-            "RETURN e.id AS id, e.version_id AS version_id, e.kind AS kind, "
-            "e.name AS name, e.qualified_name AS qualified_name, "
-            "e.repo AS repo, e.file_path AS file_path, "
-            "e.valid_from AS valid_from, e.valid_until AS valid_until, "
-            "e.observed_at AS observed_at, e.change_source AS change_source, "
-            "e.commit_sha AS commit_sha, e.agent_id AS agent_id, "
-            "e.superseded_by AS superseded_by",
+            f"MATCH (e:Entity {{id: $id}}) WHERE e.valid_until IS NULL RETURN {_ENTITY_RETURN}",
             {"id": entity_id},
         )
         if not rows:
@@ -340,7 +381,7 @@ class FalkorDBTemporalGraph:
             timestamp=now,
         )
 
-    # ── Time-travel queries — TASK-1.4.3 stubs ───────────────────────────────
+    # ── Time-travel queries (TASK-1.4.3) ─────────────────────────────────────
 
     async def query_at(
         self,
@@ -348,16 +389,34 @@ class FalkorDBTemporalGraph:
         at_time: datetime,
         params: dict[str, Any] | None = None,
     ) -> Sequence[dict[str, Any]]:
-        """Time-travel query — implemented in TASK-1.4.3."""
-        raise NotImplementedError("query_at is implemented in TASK-1.4.3")
+        """Execute a Cypher query scoped to graph state at ``at_time``.
+
+        Injects ``WHERE e.valid_from <= $at AND (e.valid_until IS NULL OR
+        e.valid_until > $at)`` into the query automatically.  The query must
+        use ``e`` as the entity node alias.
+        """
+        at_str = at_time.isoformat()
+        filtered = _inject_at_filter(cypher, at_str)
+        merged = dict(params or {})
+        merged["__at"] = at_str
+        return await self._client.execute(filtered, merged)
 
     async def get_entity_at(
         self,
         entity_id: str,
         at_time: datetime,
     ) -> TemporalGraphEntity | None:
-        """Time-travel entity lookup — implemented in TASK-1.4.3."""
-        raise NotImplementedError("get_entity_at is implemented in TASK-1.4.3")
+        """Return the entity version that was current at ``at_time``, or ``None``."""
+        at_str = at_time.isoformat()
+        rows = await self._client.execute(
+            f"MATCH (e:Entity {{id: $id}}) "
+            f"WHERE e.valid_from <= $at AND (e.valid_until IS NULL OR e.valid_until > $at) "
+            f"RETURN {_ENTITY_RETURN}",
+            {"id": entity_id, "at": at_str},
+        )
+        if not rows:
+            return None
+        return _row_to_entity(rows[0])
 
     async def get_entity_history(
         self,
@@ -365,10 +424,27 @@ class FalkorDBTemporalGraph:
         since: datetime | None = None,
         until: datetime | None = None,
     ) -> Sequence[TemporalGraphEntity]:
-        """Entity version history — implemented in TASK-1.4.3."""
-        raise NotImplementedError("get_entity_history is implemented in TASK-1.4.3")
+        """Return all versions of an entity ordered by ``valid_from ASC``.
 
-    # ── Change-awareness queries — TASK-1.4.3 stubs ──────────────────────────
+        Optional ``since`` / ``until`` bound the versions returned by their
+        ``valid_from`` timestamp.
+        """
+        conditions = ["e.id = $id"]
+        params: dict[str, Any] = {"id": entity_id}
+        if since is not None:
+            conditions.append("e.valid_from >= $since")
+            params["since"] = since.isoformat()
+        if until is not None:
+            conditions.append("e.valid_from <= $until")
+            params["until"] = until.isoformat()
+        where = " AND ".join(conditions)
+        rows = await self._client.execute(
+            f"MATCH (e:Entity) WHERE {where} RETURN {_ENTITY_RETURN} ORDER BY e.valid_from",
+            params,
+        )
+        return [_row_to_entity(r) for r in rows]
+
+    # ── Change-awareness queries (TASK-1.4.3) ────────────────────────────────
 
     async def get_changes_since(
         self,
@@ -376,8 +452,17 @@ class FalkorDBTemporalGraph:
         repo: str | None = None,
         entity_kinds: Sequence[str] | None = None,
     ) -> ChangeSet:
-        """Change detection since a timestamp — implemented in TASK-1.4.3."""
-        raise NotImplementedError("get_changes_since is implemented in TASK-1.4.3")
+        """Return all changes observed since ``since``.
+
+        Uses the ``(observed_at)`` index — critical performance path for agent
+        wake-up catchup (realtime-temporal-spec.py §H).  Classification:
+        - ``entities_added``    — new entity, no prior version before ``since``
+        - ``entities_modified`` — entity updated; prior version existed
+        - ``entities_removed``  — entity deleted; no current version remains
+        """
+        since_str = since.isoformat()
+        now = datetime.now(tz=UTC)
+        return await self._collect_changes(since_str, None, now.isoformat(), repo, entity_kinds)
 
     async def get_changes_between(
         self,
@@ -385,15 +470,46 @@ class FalkorDBTemporalGraph:
         end: datetime,
         repo: str | None = None,
     ) -> ChangeSet:
-        """Bounded change detection — implemented in TASK-1.4.3."""
-        raise NotImplementedError("get_changes_between is implemented in TASK-1.4.3")
+        """Return changes where ``start <= observed_at < end``."""
+        return await self._collect_changes(
+            start.isoformat(), start.isoformat(), end.isoformat(), repo, None
+        )
 
     async def get_changes_by_commit(
         self,
         commit_sha: str,
     ) -> ChangeSet:
-        """Commit-scoped change detection — implemented in TASK-1.4.3."""
-        raise NotImplementedError("get_changes_by_commit is implemented in TASK-1.4.3")
+        """Return all changes attributed to ``commit_sha``."""
+        rows = await self._client.execute(
+            f"MATCH (e:Entity) WHERE e.commit_sha = $sha RETURN {_ENTITY_RETURN}",
+            {"sha": commit_sha},
+        )
+        now = datetime.now(tz=UTC)
+        entities_added: list[TemporalGraphEntity] = []
+        entities_modified: list[EntityModification] = []
+        entities_removed: list[TemporalGraphEntity] = []
+        commits: set[str] = set()
+
+        for row in rows:
+            entity = _row_to_entity(row)
+            commits.add(commit_sha)
+            valid_until_raw: Any = row.get("valid_until")
+            if valid_until_raw is not None:
+                entities_removed.append(entity)
+            elif row.get("superseded_by") is None:
+                entities_added.append(entity)
+            else:
+                entities_added.append(entity)
+
+        earliest = min((e.temporal.observed_at for e in entities_added), default=now)
+        return ChangeSet(
+            time_range_start=earliest,
+            time_range_end=now,
+            entities_added=entities_added,
+            entities_modified=entities_modified,
+            entities_removed=entities_removed,
+            commits=list(commits),
+        )
 
     async def diff_graph(
         self,
@@ -401,8 +517,196 @@ class FalkorDBTemporalGraph:
         time_b: datetime,
         repo: str | None = None,
     ) -> GraphDiff:
-        """Structural graph diff — implemented in TASK-1.4.3."""
-        raise NotImplementedError("diff_graph is implemented in TASK-1.4.3")
+        """Compute a structural diff between graph state at ``time_a`` and ``time_b``."""
+        repo_filter = " AND e.repo = $repo" if repo else ""
+        params_a: dict[str, Any] = {"at": time_a.isoformat()}
+        params_b: dict[str, Any] = {"at": time_b.isoformat()}
+        if repo:
+            params_a["repo"] = repo
+            params_b["repo"] = repo
+
+        at_clause = (
+            "e.valid_from <= $at AND (e.valid_until IS NULL OR e.valid_until > $at)"
+        )
+        q = f"MATCH (e:Entity) WHERE {at_clause}{repo_filter} RETURN {_ENTITY_RETURN}"
+
+        rows_a = await self._client.execute(q, params_a)
+        rows_b = await self._client.execute(q, params_b)
+
+        state_a: dict[str, TemporalGraphEntity] = {
+            str(r["id"]): _row_to_entity(r) for r in rows_a
+        }
+        state_b: dict[str, TemporalGraphEntity] = {
+            str(r["id"]): _row_to_entity(r) for r in rows_b
+        }
+
+        ids_a = set(state_a)
+        ids_b = set(state_b)
+
+        added_entities = [state_b[eid] for eid in ids_b - ids_a]
+        removed_entities = [state_a[eid] for eid in ids_a - ids_b]
+        modified_entities: list[EntityModification] = []
+        for eid in ids_a & ids_b:
+            prev = state_a[eid]
+            curr = state_b[eid]
+            if prev.version_id != curr.version_id:
+                modified_entities.append(
+                    EntityModification(
+                        entity_id=eid,
+                        previous_version=prev,
+                        current_version=curr,
+                        changed_fields=_compute_changed_fields(prev, curr),
+                        change_description=f"Entity {eid} changed between snapshots",
+                    )
+                )
+
+        repos_affected: list[str] = list(
+            {e.repo for e in added_entities}
+            | {e.repo for e in removed_entities}
+            | {m.current_version.repo for m in modified_entities}
+        )
+
+        return GraphDiff(
+            time_a=time_a,
+            time_b=time_b,
+            added_entities=added_entities,
+            removed_entities=removed_entities,
+            modified_entities=modified_entities,
+            repos_affected=repos_affected,
+        )
+
+    # ── Private helpers ───────────────────────────────────────────────────────
+
+    async def _collect_changes(
+        self,
+        since_str: str,
+        obs_start: str | None,
+        obs_end: str,
+        repo: str | None,
+        entity_kinds: Sequence[str] | None,
+    ) -> ChangeSet:
+        """Core logic shared by get_changes_since and get_changes_between.
+
+        Three-query approach:
+        1. Current entities observed in window  → added or modified candidates
+        2. Prior versions for modified detection (JOIN-style Cypher, no N+1)
+        3. Closed entities in window            → removed candidates
+        """
+        # ── Build filter clauses ───────────────────────────────────────────
+        repo_filter = " AND e.repo = $repo" if repo else ""
+        params: dict[str, Any] = {"since": since_str, "obs_end": obs_end}
+        if repo:
+            params["repo"] = repo
+
+        kind_clause = ""
+        if entity_kinds:
+            inlined = ", ".join(f"'{k}'" for k in entity_kinds)
+            kind_clause = f" AND e.kind IN [{inlined}]"
+
+        obs_start_clause = ""
+        if obs_start:
+            obs_start_clause = " AND e.observed_at >= $obs_start"
+            params["obs_start"] = obs_start
+
+        # ── Q1: current entities observed in window (uses observed_at index) ─
+        q1 = (
+            f"MATCH (e:Entity) "
+            f"WHERE e.observed_at <= $obs_end{obs_start_clause} AND e.valid_until IS NULL"
+            f"{repo_filter}{kind_clause} "
+            f"RETURN {_ENTITY_RETURN}"
+        )
+        current_rows = await self._client.execute(q1, params)
+        current_by_id: dict[str, dict[str, Any]] = {
+            str(r["id"]): r for r in current_rows
+        }
+
+        # ── Q2: prior versions via nested MATCH — determines added vs modified ─
+        prior_by_id: dict[str, TemporalGraphEntity] = {}
+        if current_by_id:
+            q2_params: dict[str, Any] = {"since": since_str, "obs_end": obs_end}
+            if repo:
+                q2_params["repo"] = repo
+            q2 = (
+                f"MATCH (new_e:Entity) "
+                f"WHERE new_e.observed_at <= $obs_end{obs_start_clause} "
+                f"AND new_e.valid_until IS NULL{repo_filter}{kind_clause} "
+                f"MATCH (e:Entity {{id: new_e.id}}) "
+                f"WHERE e.valid_from < $since "
+                f"RETURN {_ENTITY_RETURN} "
+                f"ORDER BY e.id, e.valid_from DESC"
+            )
+            if obs_start:
+                q2_params["obs_start"] = obs_start
+            prior_rows = await self._client.execute(q2, q2_params)
+            for row in prior_rows:
+                eid = str(row["id"])
+                if eid not in prior_by_id:
+                    prior_by_id[eid] = _row_to_entity(row)
+
+        # ── Q3: closed entities in window — candidates for removed ────────────
+        q3 = (
+            f"MATCH (e:Entity) "
+            f"WHERE e.valid_until >= $since AND e.valid_until <= $obs_end "
+            f"AND e.valid_until IS NOT NULL{repo_filter} "
+            f"RETURN {_ENTITY_RETURN}"
+        )
+        q3_params: dict[str, Any] = {"since": since_str, "obs_end": obs_end}
+        if repo:
+            q3_params["repo"] = repo
+        closed_rows = await self._client.execute(q3, q3_params)
+        closed_entity_ids: set[str] = {str(r["id"]) for r in closed_rows}
+
+        # ── Classify ───────────────────────────────────────────────────────────
+        entities_added: list[TemporalGraphEntity] = []
+        entities_modified: list[EntityModification] = []
+        commits: set[str] = set()
+        agents: set[str] = set()
+
+        for eid, row in current_by_id.items():
+            entity = _row_to_entity(row)
+            cs = entity.temporal.commit_sha
+            if cs:
+                commits.add(cs)
+            ai = entity.temporal.agent_id
+            if ai:
+                agents.add(ai)
+
+            prior = prior_by_id.get(eid)
+            if prior is not None:
+                entities_modified.append(
+                    EntityModification(
+                        entity_id=eid,
+                        previous_version=prior,
+                        current_version=entity,
+                        changed_fields=_compute_changed_fields(prior, entity),
+                        change_description=f"Entity {eid} was modified",
+                    )
+                )
+            else:
+                entities_added.append(entity)
+
+        # Removed: closed in window AND no current version in Q1
+        entities_removed: list[TemporalGraphEntity] = []
+        removed_ids = closed_entity_ids - set(current_by_id)
+        for row in closed_rows:
+            eid = str(row["id"])
+            if eid in removed_ids:
+                entities_removed.append(_row_to_entity(row))
+                removed_ids.discard(eid)  # deduplicate
+
+        since_dt = datetime.fromisoformat(since_str)
+        obs_end_dt = datetime.fromisoformat(obs_end)
+
+        return ChangeSet(
+            time_range_start=since_dt,
+            time_range_end=obs_end_dt,
+            repo_filter=repo,
+            entities_added=entities_added,
+            entities_modified=entities_modified,
+            entities_removed=entities_removed,
+            commits=list(commits),
+            agents_involved=list(agents),
+        )
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
