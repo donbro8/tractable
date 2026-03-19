@@ -5,11 +5,16 @@ All tests use a mocked FalkorDBClient — no live FalkorDB required.
 
 from __future__ import annotations
 
+import io
+import json
 from typing import Any, cast
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import pytest
+import structlog
+import structlog.contextvars
 
+from tractable.errors import RecoverableError
 from tractable.graph.client import FalkorDBClient
 from tractable.graph.temporal_graph import FalkorDBTemporalGraph, _inject_current_filter
 from tractable.types.enums import ChangeRisk, ChangeSource
@@ -328,3 +333,133 @@ class TestMutationErrors:
         result = await graph.apply_mutations(mutations, ChangeSource.HUMAN_COMMIT)
         assert len(result.errors) == 1
         assert result.entities_created == 1
+
+
+# ── AC-3: RecoverableError when _inject_current_filter returns malformed query ─
+
+
+class TestInjectFilterMalformedQuery:
+    @pytest.mark.asyncio
+    async def test_inject_filter_malformed_query(self) -> None:
+        """AC-3: query_current raises RecoverableError if the injected filter is missing."""
+        mock = AsyncMock()
+        mock.execute = AsyncMock(return_value=[])
+        mock.execute_write = AsyncMock(return_value=[])
+        graph = FalkorDBTemporalGraph(cast(FalkorDBClient, mock))
+
+        # Patch _inject_current_filter at the module level so query_current
+        # sees a result that lacks the validity filter.
+        with patch(
+            "tractable.graph.temporal_graph._inject_current_filter",
+            return_value="MATCH (e:Entity) RETURN e",  # missing valid_until IS NULL
+        ):
+            with pytest.raises(RecoverableError, match="malformed query"):
+                await graph.query_current("MATCH (e:Entity) RETURN e")
+
+
+# ── AC-4: structlog entry on apply_mutations ───────────────────────────────────
+
+
+def _make_capture_logger() -> tuple[io.StringIO, None]:
+    """Configure structlog to write JSON to a buffer; return the buffer."""
+    buf = io.StringIO()
+    structlog.configure(
+        processors=[
+            structlog.contextvars.merge_contextvars,
+            structlog.stdlib.add_log_level,
+            structlog.processors.JSONRenderer(),
+        ],
+        wrapper_class=structlog.make_filtering_bound_logger(10),
+        context_class=dict,
+        logger_factory=structlog.PrintLoggerFactory(file=buf),
+        cache_logger_on_first_use=False,
+    )
+    return buf, None
+
+
+class TestApplyMutationsLogging:
+    @pytest.mark.asyncio
+    async def test_mutations_applied_log_entry(self) -> None:
+        """AC-4: apply_mutations emits event='mutations_applied' with mutation_count."""
+        structlog.contextvars.clear_contextvars()
+        buf, _ = _make_capture_logger()
+
+        mock = AsyncMock()
+        mock.execute = AsyncMock(return_value=[])  # orphan check + any reads
+        mock.execute_write = AsyncMock(return_value=[])
+        graph = FalkorDBTemporalGraph(cast(FalkorDBClient, mock))
+
+        mutations = [
+            TemporalMutation(operation="create_entity", payload={"id": "e-1"}),
+            TemporalMutation(operation="create_entity", payload={"id": "e-2"}),
+        ]
+        await graph.apply_mutations(mutations, ChangeSource.HUMAN_COMMIT)
+
+        # Find the mutations_applied log entry
+        records = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+        applied = [r for r in records if r.get("event") == "mutations_applied"]
+        assert applied, f"Expected 'mutations_applied' log entry, got: {records}"
+        entry = applied[0]
+        assert entry["mutation_count"] == 2
+        assert entry["level"] == "info"
+
+    @pytest.mark.asyncio
+    async def test_mutations_applying_log_entry(self) -> None:
+        """apply_mutations emits event='mutations_applying' before execution."""
+        structlog.contextvars.clear_contextvars()
+        buf, _ = _make_capture_logger()
+
+        mock = AsyncMock()
+        mock.execute = AsyncMock(return_value=[])
+        mock.execute_write = AsyncMock(return_value=[])
+        graph = FalkorDBTemporalGraph(cast(FalkorDBClient, mock))
+
+        await graph.apply_mutations([], ChangeSource.HUMAN_COMMIT)
+
+        records = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+        applying = [r for r in records if r.get("event") == "mutations_applying"]
+        assert applying
+
+
+# ── AC-6: orphan detection logging ────────────────────────────────────────────
+
+
+class TestOrphanDetection:
+    @pytest.mark.asyncio
+    async def test_graph_orphan_detected_log_entry(self) -> None:
+        """AC-6: _check_for_orphaned_entities logs event='graph_orphan_detected'."""
+        structlog.contextvars.clear_contextvars()
+        buf, _ = _make_capture_logger()
+
+        orphan_rows = [{"entity_id": "orphan-123"}]
+        mock = AsyncMock()
+        # First execute call (orphan check) returns the orphan; subsequent calls return []
+        mock.execute = AsyncMock(side_effect=[orphan_rows, [], []])
+        mock.execute_write = AsyncMock(return_value=[])
+        graph = FalkorDBTemporalGraph(cast(FalkorDBClient, mock))
+
+        await graph.apply_mutations([], ChangeSource.HUMAN_COMMIT)
+
+        records = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+        orphan_entries = [r for r in records if r.get("event") == "graph_orphan_detected"]
+        assert orphan_entries, f"Expected 'graph_orphan_detected' log entry, got: {records}"
+        entry = orphan_entries[0]
+        assert "orphan-123" in entry["entity_ids"]
+        assert entry["level"] == "error"
+
+    @pytest.mark.asyncio
+    async def test_no_orphan_log_when_graph_clean(self) -> None:
+        """No orphan log entry when graph has no orphaned entities."""
+        structlog.contextvars.clear_contextvars()
+        buf, _ = _make_capture_logger()
+
+        mock = AsyncMock()
+        mock.execute = AsyncMock(return_value=[])  # no orphans
+        mock.execute_write = AsyncMock(return_value=[])
+        graph = FalkorDBTemporalGraph(cast(FalkorDBClient, mock))
+
+        await graph.apply_mutations([], ChangeSource.HUMAN_COMMIT)
+
+        records = [json.loads(line) for line in buf.getvalue().splitlines() if line.strip()]
+        orphan_entries = [r for r in records if r.get("event") == "graph_orphan_detected"]
+        assert not orphan_entries

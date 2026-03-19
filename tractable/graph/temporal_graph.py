@@ -17,6 +17,9 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
+import structlog
+
+from tractable.errors import RecoverableError
 from tractable.graph.client import FalkorDBClient
 from tractable.types.enums import ChangeRisk, ChangeSource
 from tractable.types.graph import GraphEntity, ImpactReport
@@ -29,6 +32,8 @@ from tractable.types.temporal import (
     TemporalMutation,
     TemporalMutationResult,
 )
+
+logger = structlog.get_logger()
 
 # ── Shared Cypher return clause for entity properties ─────────────────────────
 
@@ -160,7 +165,18 @@ class FalkorDBTemporalGraph:
         The query must use ``e`` as the entity node alias.
         """
         filtered = _inject_current_filter(cypher)
-        return await self._client.execute(filtered, params or {})
+        # Guard: injection must produce a query containing the validity filter.
+        # If it doesn't, the query would silently return all versions of every
+        # entity rather than current-only — a correctness failure, not a crash.
+        if "valid_until IS NULL" not in filtered:
+            raise RecoverableError(
+                f"_inject_current_filter produced a malformed query "
+                f"(missing 'valid_until IS NULL'): {filtered!r}"
+            )
+        logger.debug("graph_query_current", query=filtered)
+        rows = await self._client.execute(filtered, params or {})
+        logger.debug("graph_query_current_done", row_count=len(rows))
+        return rows
 
     async def get_current_entity(
         self,
@@ -271,6 +287,14 @@ class FalkorDBTemporalGraph:
         now = datetime.now(tz=UTC)
         observed_at = now.isoformat()
 
+        await self._check_for_orphaned_entities()
+        logger.info(
+            "mutations_applying",
+            mutation_count=len(mutations),
+            change_source=str(change_source),
+            commit_sha=commit_sha,
+        )
+
         entities_created = 0
         entities_updated = 0
         entities_deleted = 0
@@ -371,6 +395,16 @@ class FalkorDBTemporalGraph:
                     f"{mutation.entity_id or mutation.edge_id or '?'}): {exc}"
                 )
 
+        logger.info(
+            "mutations_applied",
+            mutation_count=len(mutations),
+            entities_created=entities_created,
+            entities_updated=entities_updated,
+            entities_deleted=entities_deleted,
+            edges_created=edges_created,
+            edges_deleted=edges_deleted,
+            error_count=len(errors),
+        )
         return TemporalMutationResult(
             entities_created=entities_created,
             entities_updated=entities_updated,
@@ -399,7 +433,10 @@ class FalkorDBTemporalGraph:
         filtered = _inject_at_filter(cypher, at_str)
         merged = dict(params or {})
         merged["__at"] = at_str
-        return await self._client.execute(filtered, merged)
+        logger.debug("graph_query_at", at=at_str, query=filtered)
+        rows = await self._client.execute(filtered, merged)
+        logger.debug("graph_query_at_done", at=at_str, row_count=len(rows))
+        return rows
 
     async def get_entity_at(
         self,
@@ -709,6 +746,36 @@ class FalkorDBTemporalGraph:
         )
 
     # ── Private helpers ───────────────────────────────────────────────────────
+
+    async def _check_for_orphaned_entities(self) -> None:
+        """Detect entities closed without a successor (close-without-create atomicity violation).
+
+        An orphan is an entity where ``valid_until IS NOT NULL`` and no open
+        entity with the same ``id`` (``valid_until IS NULL``) exists.  This
+        state can arise from a crash between the close and create steps of an
+        ``update_entity`` mutation (see phase-1-analysis.md §4.5).
+
+        Detection only — no abort.  If orphans are found, logs
+        ``event="graph_orphan_detected"`` at ``level=error`` with the list of
+        ``entity_id`` values so operators can investigate and repair manually.
+        """
+        rows = await self._client.execute(
+            "MATCH (closed:Entity) "
+            "WHERE closed.valid_until IS NOT NULL "
+            "AND NOT EXISTS { "
+            "  MATCH (open:Entity {id: closed.id}) "
+            "  WHERE open.valid_until IS NULL "
+            "} "
+            "RETURN closed.id AS entity_id",
+            {},
+        )
+        if rows:
+            orphan_ids = [str(r["entity_id"]) for r in rows]
+            logger.error(
+                "graph_orphan_detected",
+                entity_ids=orphan_ids,
+                orphan_count=len(orphan_ids),
+            )
 
     async def _create_entity(
         self,

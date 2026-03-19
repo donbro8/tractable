@@ -5,10 +5,11 @@ All connection parameters come from environment variables — no hardcoded
 credentials or host names.
 
 Environment variables:
-  FALKORDB_HOST         FalkorDB hostname        (default: localhost)
-  FALKORDB_PORT         FalkorDB port            (default: 6380)
-  FALKORDB_GRAPH_NAME   Graph name to query      (default: tractable)
-  FALKORDB_PASSWORD     Redis AUTH password      (optional)
+  FALKORDB_HOST           FalkorDB hostname         (default: localhost)
+  FALKORDB_PORT           FalkorDB port             (default: 6380)
+  FALKORDB_GRAPH_NAME     Graph name to query       (default: tractable)
+  FALKORDB_PASSWORD       Redis AUTH password       (optional)
+  FALKORDB_MAX_CONNECTIONS  Connection pool cap     (default: 10)
 """
 
 from __future__ import annotations
@@ -17,6 +18,11 @@ import os
 from typing import Any, cast
 
 import redis.asyncio as aioredis
+import structlog
+
+from tractable.errors import RecoverableError, TransientError
+
+logger = structlog.get_logger()
 
 
 class FalkorDBClient:
@@ -26,6 +32,10 @@ class FalkorDBClient:
     ``execute`` and ``execute_write`` are semantically distinct — write is
     kept separate to allow future read-replica routing — but both use the
     same underlying command today.
+
+    Connection pool size is controlled by ``FALKORDB_MAX_CONNECTIONS``
+    (default 10).  A pool acquisition timeout raises :class:`TransientError`
+    so the agent retry loop handles it via exponential back-off.
     """
 
     def __init__(
@@ -47,12 +57,16 @@ class FalkorDBClient:
         _env_password: str | None = os.environ.get("FALKORDB_PASSWORD") or None
         _password: str | None = password if password is not None else _env_password
 
+        max_connections: int = int(
+            os.environ.get("FALKORDB_MAX_CONNECTIONS", "10")
+        )
+
         self._pool: aioredis.ConnectionPool = aioredis.ConnectionPool(
             host=self._host,
             port=self._port,
             password=_password,
             decode_responses=True,
-            max_connections=10,
+            max_connections=max_connections,
         )
 
     async def ping(self) -> bool:
@@ -71,16 +85,63 @@ class FalkorDBClient:
 
         Sends ``GRAPH.QUERY <graph_name> <cypher>`` and parses the
         FalkorDB response format: ``[[headers], [[row...], ...], [stats]]``.
+
+        Raises
+        ------
+        TransientError
+            If the FalkorDB connection is unavailable or the pool is
+            exhausted (``ConnectionError``, ``TimeoutError``).
+        RecoverableError
+            If the server response cannot be parsed into the expected shape.
         """
         client = aioredis.Redis(connection_pool=self._pool)
         query = self._build_query(cypher, params)
-        raw: list[Any] = cast(
-            list[Any],
-            await client.execute_command(  # pyright: ignore[reportUnknownMemberType]
-                "GRAPH.QUERY", self._graph_name, query
-            ),
-        )
-        return self._parse_response(raw)
+        try:
+            raw: list[Any] = cast(
+                list[Any],
+                await client.execute_command(  # pyright: ignore[reportUnknownMemberType]
+                    "GRAPH.QUERY", self._graph_name, query
+                ),
+            )
+        except TimeoutError as exc:
+            logger.error(
+                "falkordb_pool_timeout",
+                graph=self._graph_name,
+                error=str(exc),
+            )
+            raise TransientError(
+                f"FalkorDB connection pool timed out: {exc}"
+            ) from exc
+        except ConnectionError as exc:
+            logger.error(
+                "falkordb_connection_error",
+                graph=self._graph_name,
+                error=str(exc),
+            )
+            raise TransientError(
+                f"FalkorDB is unreachable: {exc}"
+            ) from exc
+        except Exception as exc:
+            logger.error(
+                "falkordb_query_error",
+                graph=self._graph_name,
+                error=str(exc),
+            )
+            raise TransientError(
+                f"FalkorDB query failed: {exc}"
+            ) from exc
+
+        try:
+            return self._parse_response(raw)
+        except (IndexError, KeyError, TypeError, ValueError) as exc:
+            logger.error(
+                "falkordb_parse_error",
+                graph=self._graph_name,
+                error=str(exc),
+            )
+            raise RecoverableError(
+                f"FalkorDB response could not be parsed: {exc}"
+            ) from exc
 
     async def execute_write(
         self, cypher: str, params: dict[str, Any]

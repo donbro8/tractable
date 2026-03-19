@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tractable.errors import TransientError
 from tractable.graph.client import FalkorDBClient
 
 # ── Initialisation ────────────────────────────────────────────────────────────
@@ -210,3 +211,72 @@ class TestExecute:
 
         called_query: str = mock_redis.execute_command.call_args[0][2]
         assert "CYPHER repo='svc'" in called_query
+
+
+# ── Error taxonomy — connection failure → TransientError ──────────────────────
+
+
+class TestTransientErrorOnConnectionFailure:
+    @pytest.mark.asyncio
+    async def test_transient_error_on_connection_failure(self) -> None:
+        """AC-2: ConnectionError from redis → TransientError (not bare ConnectionError)."""
+        mock_redis: Any = AsyncMock()
+        mock_redis.execute_command = AsyncMock(
+            side_effect=ConnectionError("Connection refused")
+        )
+
+        with patch("tractable.graph.client.aioredis.ConnectionPool"):
+            client = FalkorDBClient()
+        with patch("tractable.graph.client.aioredis.Redis", return_value=mock_redis):
+            with pytest.raises(TransientError, match="FalkorDB is unreachable"):
+                await client.execute("MATCH (e) RETURN e", {})
+
+    @pytest.mark.asyncio
+    async def test_transient_error_on_timeout(self) -> None:
+        """Pool acquisition timeout → TransientError."""
+        mock_redis: Any = AsyncMock()
+        mock_redis.execute_command = AsyncMock(
+            side_effect=TimeoutError("pool exhausted")
+        )
+
+        with patch("tractable.graph.client.aioredis.ConnectionPool"):
+            client = FalkorDBClient()
+        with patch("tractable.graph.client.aioredis.Redis", return_value=mock_redis):
+            with pytest.raises(TransientError, match="timed out"):
+                await client.execute("MATCH (e) RETURN e", {})
+
+
+# ── Pool size from environment variable ───────────────────────────────────────
+
+
+class TestPoolSizeFromEnv:
+    def test_max_connections_from_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """AC-5: FALKORDB_MAX_CONNECTIONS=5 → pool max_connections=5."""
+        monkeypatch.setenv("FALKORDB_MAX_CONNECTIONS", "5")
+        monkeypatch.delenv("FALKORDB_PASSWORD", raising=False)
+
+        captured: dict[str, Any] = {}
+
+        def fake_pool(**kwargs: Any) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock()
+
+        with patch("tractable.graph.client.aioredis.ConnectionPool", side_effect=fake_pool):
+            FalkorDBClient()
+
+        assert captured["max_connections"] == 5
+
+    def test_default_max_connections_is_10(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("FALKORDB_MAX_CONNECTIONS", raising=False)
+        monkeypatch.delenv("FALKORDB_PASSWORD", raising=False)
+
+        captured: dict[str, Any] = {}
+
+        def fake_pool(**kwargs: Any) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock()
+
+        with patch("tractable.graph.client.aioredis.ConnectionPool", side_effect=fake_pool):
+            FalkorDBClient()
+
+        assert captured["max_connections"] == 10
