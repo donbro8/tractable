@@ -13,7 +13,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from tractable.types.enums import AgentStatus, TaskPhase
-from tractable.types.temporal import ChangeNotification
+from tractable.types.temporal import AgentReactivityConfig, ChangeNotification
 
 
 class AgentContext(BaseModel):
@@ -26,6 +26,7 @@ class AgentContext(BaseModel):
     """
 
     agent_id: str
+    repo: str = ""
     base_template: str
     system_prompt: str
     repo_architectural_summary: str
@@ -33,6 +34,7 @@ class AgentContext(BaseModel):
     pinned_instructions: list[str] = Field(default_factory=list)
     user_overrides: dict[str, Any] = Field(default_factory=dict)
     last_refreshed: datetime | None = None
+    reactivity_config: AgentReactivityConfig = Field(default_factory=AgentReactivityConfig)
 
 
 class AgentCheckpoint(BaseModel):
@@ -107,6 +109,7 @@ class TemporalAgentContext(BaseModel):
 __all__ = [
     "AgentContext",
     "AgentCheckpoint",
+    "AgentReactivityConfig",
     "AgentStatus",
     "AuditEntry",
     "ChangeVelocity",
