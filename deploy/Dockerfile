@@ -16,4 +16,4 @@ RUN uv sync --frozen --no-dev
 # Use uv's managed Python
 ENV PATH="/app/.venv/bin:$PATH"
 
-CMD ["python", "-m", "tractable.cli"]
+CMD ["uvicorn", "tractable.registry.main:app", "--host", "0.0.0.0", "--port", "8000"]
