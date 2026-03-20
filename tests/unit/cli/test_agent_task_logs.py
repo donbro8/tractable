@@ -190,6 +190,7 @@ def test_agent_edit_saves_unchanged_via_store_mock() -> None:
             "tractable.state.store.PostgreSQLAgentStateStore.from_env",
             return_value=mock_store,
         ),
+        patch("tractable.cli.commands.agent.subprocess.run"),
         patch.dict("os.environ", {"EDITOR": "cat"}),
     ):
         result = runner.invoke(app, ["agent", "edit", "agent-001"])

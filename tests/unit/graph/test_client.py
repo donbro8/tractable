@@ -5,7 +5,6 @@ All tests use mocked redis connections — no live FalkorDB instance required.
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -136,7 +135,7 @@ class TestParseResponse:
 class TestPing:
     @pytest.mark.asyncio
     async def test_returns_true_when_redis_pong(self) -> None:
-        mock_redis: Any = AsyncMock()
+        mock_redis = AsyncMock()
         mock_redis.ping = AsyncMock(return_value=True)
 
         with patch("tractable.graph.client.aioredis.ConnectionPool"):
@@ -148,7 +147,7 @@ class TestPing:
 
     @pytest.mark.asyncio
     async def test_returns_false_on_connection_error(self) -> None:
-        mock_redis: Any = AsyncMock()
+        mock_redis = AsyncMock()
         mock_redis.ping = AsyncMock(side_effect=ConnectionError("refused"))
 
         with patch("tractable.graph.client.aioredis.ConnectionPool"):
@@ -165,9 +164,9 @@ class TestPing:
 class TestExecute:
     @pytest.mark.asyncio
     async def test_execute_returns_parsed_rows(self) -> None:
-        raw_response: Any = [["cnt"], [[0]], ["Query internal execution time: 0.1 ms"]]
+        raw_response = [["cnt"], [[0]], ["Query internal execution time: 0.1 ms"]]
 
-        mock_redis: Any = AsyncMock()
+        mock_redis = AsyncMock()
         mock_redis.execute_command = AsyncMock(return_value=raw_response)
 
         with patch("tractable.graph.client.aioredis.ConnectionPool"):
@@ -183,9 +182,9 @@ class TestExecute:
     @pytest.mark.asyncio
     async def test_execute_write_succeeds_and_returns_empty_for_create(self) -> None:
         # Write: CREATE returns no header rows
-        raw_response: Any = [[], ["Nodes created: 1"]]
+        raw_response = [[], ["Nodes created: 1"]]
 
-        mock_redis: Any = AsyncMock()
+        mock_redis = AsyncMock()
         mock_redis.execute_command = AsyncMock(return_value=raw_response)
 
         with patch("tractable.graph.client.aioredis.ConnectionPool"):
@@ -199,9 +198,9 @@ class TestExecute:
 
     @pytest.mark.asyncio
     async def test_execute_delegates_params_to_build_query(self) -> None:
-        raw_response: Any = [["e"], [[MagicMock()]], ["stats"]]
+        raw_response = [["e"], [[MagicMock()]], ["stats"]]
 
-        mock_redis: Any = AsyncMock()
+        mock_redis = AsyncMock()
         mock_redis.execute_command = AsyncMock(return_value=raw_response)
 
         with patch("tractable.graph.client.aioredis.ConnectionPool"):
@@ -220,7 +219,7 @@ class TestTransientErrorOnConnectionFailure:
     @pytest.mark.asyncio
     async def test_transient_error_on_connection_failure(self) -> None:
         """AC-2: ConnectionError from redis → TransientError (not bare ConnectionError)."""
-        mock_redis: Any = AsyncMock()
+        mock_redis = AsyncMock()
         mock_redis.execute_command = AsyncMock(side_effect=ConnectionError("Connection refused"))
 
         with patch("tractable.graph.client.aioredis.ConnectionPool"):
@@ -234,7 +233,7 @@ class TestTransientErrorOnConnectionFailure:
     @pytest.mark.asyncio
     async def test_transient_error_on_timeout(self) -> None:
         """Pool acquisition timeout → TransientError."""
-        mock_redis: Any = AsyncMock()
+        mock_redis = AsyncMock()
         mock_redis.execute_command = AsyncMock(side_effect=TimeoutError("pool exhausted"))
 
         with patch("tractable.graph.client.aioredis.ConnectionPool"):
@@ -255,7 +254,7 @@ class TestPoolSizeFromEnv:
         monkeypatch.setenv("FALKORDB_MAX_CONNECTIONS", "5")
         monkeypatch.delenv("FALKORDB_PASSWORD", raising=False)
 
-        captured: dict[str, Any] = {}
+        captured: dict[str, object] = {}
 
         def fake_pool(**kwargs: object) -> MagicMock:
             captured.update(kwargs)
@@ -270,7 +269,7 @@ class TestPoolSizeFromEnv:
         monkeypatch.delenv("FALKORDB_MAX_CONNECTIONS", raising=False)
         monkeypatch.delenv("FALKORDB_PASSWORD", raising=False)
 
-        captured: dict[str, Any] = {}
+        captured: dict[str, object] = {}
 
         def fake_pool(**kwargs: object) -> MagicMock:
             captured.update(kwargs)
