@@ -18,12 +18,10 @@ from typing import Any
 import pytest
 
 from tractable.agent.context import assemble_context
-from tractable.protocols.agent_state_store import AgentStateStore
 from tractable.types.agent import AgentCheckpoint, AgentContext, AuditEntry
 from tractable.types.config import (
     AgentScope,
     GitProviderConfig,
-    GovernancePolicy,
     RepositoryRegistration,
 )
 from tractable.types.enums import AutonomyLevel, ChangeSource
@@ -38,7 +36,6 @@ from tractable.types.graph import (
 )
 from tractable.types.temporal import (
     ChangeSet,
-    EntityModification,
     GraphDiff,
     TemporalGraphEntity,
     TemporalMutation,
@@ -87,14 +84,10 @@ class _MockStateStore:
             pinned_instructions=self._pinned,
         )
 
-    async def save_agent_context(
-        self, agent_id: str, context: AgentContext
-    ) -> None:
+    async def save_agent_context(self, agent_id: str, context: AgentContext) -> None:
         pass
 
-    async def get_checkpoint(
-        self, agent_id: str, task_id: str
-    ) -> AgentCheckpoint | None:
+    async def get_checkpoint(self, agent_id: str, task_id: str) -> AgentCheckpoint | None:
         return None
 
     async def save_checkpoint(
@@ -171,6 +164,7 @@ class _MockGraph:
         min_confidence: float = 0.5,
     ) -> ImpactReport:
         from tractable.types.enums import ChangeRisk
+
         return ImpactReport(
             directly_affected=[],
             transitively_affected=[],
@@ -179,14 +173,10 @@ class _MockGraph:
             risk_level=ChangeRisk.LOW,
         )
 
-    async def get_repo_boundary_edges(
-        self, repo_name: str
-    ) -> Sequence[CrossRepoEdge]:
+    async def get_repo_boundary_edges(self, repo_name: str) -> Sequence[CrossRepoEdge]:
         return []
 
-    async def mutate(
-        self, mutations: Sequence[GraphMutation]
-    ) -> MutationResult:
+    async def mutate(self, mutations: Sequence[GraphMutation]) -> MutationResult:
         return MutationResult(applied=0)
 
     # ── TemporalCodeGraph methods ──────────────────────────────────────
@@ -196,9 +186,7 @@ class _MockGraph:
     ) -> Sequence[dict[str, Any]]:
         return []
 
-    async def get_current_entity(
-        self, entity_id: str
-    ) -> TemporalGraphEntity | None:
+    async def get_current_entity(self, entity_id: str) -> TemporalGraphEntity | None:
         return None
 
     async def impact_analysis_current(
@@ -208,6 +196,7 @@ class _MockGraph:
         min_confidence: float = 0.5,
     ) -> ImpactReport:
         from tractable.types.enums import ChangeRisk
+
         return ImpactReport(
             directly_affected=[],
             transitively_affected=[],
@@ -224,9 +213,7 @@ class _MockGraph:
     ) -> Sequence[dict[str, Any]]:
         return []
 
-    async def get_entity_at(
-        self, entity_id: str, at_time: datetime
-    ) -> TemporalGraphEntity | None:
+    async def get_entity_at(self, entity_id: str, at_time: datetime) -> TemporalGraphEntity | None:
         return None
 
     async def get_entity_history(
@@ -346,9 +333,7 @@ async def test_pinned_instructions_after_overrides() -> None:
     """AC-2: Scope override appears before pinned instructions in the output."""
     store = _MockStateStore(pinned=["Never modify auth/"])
     graph = _MockGraph()
-    reg = _make_registration(
-        scope=AgentScope(allowed_paths=["src/"])
-    )
+    reg = _make_registration(scope=AgentScope(allowed_paths=["src/"]))
 
     result = await assemble_context("agent-1", store, graph, reg)
 
@@ -422,14 +407,10 @@ async def test_truncation_drops_recent_changes_first() -> None:
     reg = _make_registration()
 
     # Build full prompt to measure its length.
-    full = await assemble_context(
-        "agent-1", store, graph, reg, max_prompt_chars=1_000_000
-    )
+    full = await assemble_context("agent-1", store, graph, reg, max_prompt_chars=1_000_000)
 
     # Set the budget just below the full length so truncation fires.
-    trimmed = await assemble_context(
-        "agent-1", store, graph, reg, max_prompt_chars=len(full) - 1
-    )
+    trimmed = await assemble_context("agent-1", store, graph, reg, max_prompt_chars=len(full) - 1)
 
     # Template content must always be preserved.
     assert "my-api" in trimmed
@@ -446,9 +427,7 @@ async def test_truncation_small_limit_preserves_template() -> None:
     reg = _make_registration(name="test-repo")
 
     # Very small limit — should drop both recent_changes and repo_summary
-    result = await assemble_context(
-        "agent-1", store, graph, reg, max_prompt_chars=100
-    )
+    result = await assemble_context("agent-1", store, graph, reg, max_prompt_chars=100)
 
     # Template must be preserved: repo_name should appear
     assert "test-repo" in result
@@ -467,9 +446,7 @@ async def test_truncation_order_repo_summary_before_recent_changes() -> None:
     reg = _make_registration()
 
     # With a very large limit — nothing truncated
-    full = await assemble_context(
-        "agent-1", store, graph, reg, max_prompt_chars=1_000_000
-    )
+    full = await assemble_context("agent-1", store, graph, reg, max_prompt_chars=1_000_000)
 
     # Repo summary section should be present when there's enough space
     assert "Your domain:" in full
@@ -485,9 +462,7 @@ async def test_scope_injection() -> None:
     """AC-4: registration.scope.allowed_paths injected as scope restriction."""
     store = _MockStateStore()
     graph = _MockGraph()
-    reg = _make_registration(
-        scope=AgentScope(allowed_paths=["src/payments/"])
-    )
+    reg = _make_registration(scope=AgentScope(allowed_paths=["src/payments/"]))
 
     result = await assemble_context("agent-1", store, graph, reg)
 
@@ -499,9 +474,7 @@ async def test_scope_injection_multiple_paths() -> None:
     """AC-4 (extended): Multiple allowed paths appear in scope section."""
     store = _MockStateStore()
     graph = _MockGraph()
-    reg = _make_registration(
-        scope=AgentScope(allowed_paths=["src/auth/", "src/billing/"])
-    )
+    reg = _make_registration(scope=AgentScope(allowed_paths=["src/auth/", "src/billing/"]))
 
     result = await assemble_context("agent-1", store, graph, reg)
 

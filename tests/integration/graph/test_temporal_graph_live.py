@@ -60,9 +60,7 @@ async def test_create_entity_is_current(graph: FalkorDBTemporalGraph) -> None:
     assert entity.is_current is True
 
     # Cleanup
-    await graph._client.execute_write(
-        "MATCH (e:Entity {id: $id}) DELETE e", {"id": eid}
-    )
+    await graph._client.execute_write("MATCH (e:Entity {id: $id}) DELETE e", {"id": eid})
 
 
 # ── AC2 — update_entity closes old version, new version is current ────────────
@@ -83,11 +81,13 @@ async def test_update_entity_versioning(graph: FalkorDBTemporalGraph) -> None:
 
     # Update to v2
     await graph.apply_mutations(
-        [TemporalMutation(
-            operation="update_entity",
-            entity_id=eid,
-            payload={**_entity_payload(eid, vid2), "name": "updated_fn"},
-        )],
+        [
+            TemporalMutation(
+                operation="update_entity",
+                entity_id=eid,
+                payload={**_entity_payload(eid, vid2), "name": "updated_fn"},
+            )
+        ],
         ChangeSource.HUMAN_COMMIT,
     )
 
@@ -98,17 +98,14 @@ async def test_update_entity_versioning(graph: FalkorDBTemporalGraph) -> None:
 
     # v1 has valid_until set (closed)
     rows = await graph._client.execute(
-        "MATCH (e:Entity {id: $id, version_id: $vid}) "
-        "RETURN e.valid_until AS vu",
+        "MATCH (e:Entity {id: $id, version_id: $vid}) RETURN e.valid_until AS vu",
         {"id": eid, "vid": vid1},
     )
     assert len(rows) == 1
     assert rows[0]["vu"] is not None, "v1 valid_until should be set after update"
 
     # Cleanup
-    await graph._client.execute_write(
-        "MATCH (e:Entity {id: $id}) DELETE e", {"id": eid}
-    )
+    await graph._client.execute_write("MATCH (e:Entity {id: $id}) DELETE e", {"id": eid})
 
 
 # ── AC3 — delete_entity, get_current_entity returns None ─────────────────────
@@ -137,9 +134,7 @@ async def test_delete_entity_returns_none(graph: FalkorDBTemporalGraph) -> None:
     assert await graph.get_current_entity(eid) is None
 
     # Cleanup (the node still exists with valid_until set)
-    await graph._client.execute_write(
-        "MATCH (e:Entity {id: $id}) DELETE e", {"id": eid}
-    )
+    await graph._client.execute_write("MATCH (e:Entity {id: $id}) DELETE e", {"id": eid})
 
 
 # ── AC4 — impact_analysis_current on graph with 5 connected entities ─────────
@@ -153,23 +148,24 @@ async def test_impact_analysis_current_five_entities(graph: FalkorDBTemporalGrap
 
     # Create 5 entities
     mutations = [
-        TemporalMutation(operation="create_entity", payload=_entity_payload(eid))
-        for eid in ids
+        TemporalMutation(operation="create_entity", payload=_entity_payload(eid)) for eid in ids
     ]
     await graph.apply_mutations(mutations, ChangeSource.INITIAL_INGESTION)
 
     # Connect: 0→1, 1→2, 2→3, 3→4
     for i in range(4):
         await graph.apply_mutations(
-            [TemporalMutation(
-                operation="create_edge",
-                payload={
-                    "source_entity_id": ids[i],
-                    "target_entity_id": ids[i + 1],
-                    "confidence": 0.9,
-                    "relationship": "CALLS",
-                },
-            )],
+            [
+                TemporalMutation(
+                    operation="create_edge",
+                    payload={
+                        "source_entity_id": ids[i],
+                        "target_entity_id": ids[i + 1],
+                        "confidence": 0.9,
+                        "relationship": "CALLS",
+                    },
+                )
+            ],
             ChangeSource.INITIAL_INGESTION,
         )
 
@@ -179,6 +175,4 @@ async def test_impact_analysis_current_five_entities(graph: FalkorDBTemporalGrap
 
     # Cleanup
     for eid in ids:
-        await graph._client.execute_write(
-            "MATCH (e:Entity {id: $id}) DELETE e", {"id": eid}
-        )
+        await graph._client.execute_write("MATCH (e:Entity {id: $id}) DELETE e", {"id": eid})

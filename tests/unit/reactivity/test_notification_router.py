@@ -7,8 +7,8 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -17,7 +17,6 @@ from tractable.reactivity.notification_router import NotificationRouter
 from tractable.types.agent import AgentContext, AgentReactivityConfig
 from tractable.types.enums import ChangeRelevance
 from tractable.types.temporal import ChangeNotification, TemporalMutationResult
-
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -29,7 +28,7 @@ def _noop_mutation_result() -> TemporalMutationResult:
         entities_deleted=0,
         edges_created=0,
         edges_deleted=0,
-        timestamp=datetime.now(tz=timezone.utc),
+        timestamp=datetime.now(tz=UTC),
     )
 
 
@@ -94,14 +93,10 @@ async def test_two_direct_agents_both_notified() -> None:
     event_bus = AsyncMock()
     event_bus.publish = AsyncMock()
 
-    graph = _make_graph(
-        [{"agent_id": "agent-1"}, {"agent_id": "agent-2"}]
-    )
+    graph = _make_graph([{"agent_id": "agent-1"}, {"agent_id": "agent-2"}])
 
     state_store = AsyncMock()
-    state_store.get_agent_context = AsyncMock(
-        side_effect=lambda aid: _make_agent_context(aid)
-    )
+    state_store.get_agent_context = AsyncMock(side_effect=lambda aid: _make_agent_context(aid))
 
     router = NotificationRouter(event_bus)
     result = await router.route(_make_ingestion_result(), graph, state_store)
@@ -127,14 +122,10 @@ async def test_agent_with_direct_wake_disabled_not_notified() -> None:
     event_bus = AsyncMock()
     event_bus.publish = AsyncMock()
 
-    graph = _make_graph(
-        [{"agent_id": "agent-wake"}, {"agent_id": "agent-sleep"}]
-    )
+    graph = _make_graph([{"agent_id": "agent-wake"}, {"agent_id": "agent-sleep"}])
 
     def _context(agent_id: str) -> AgentContext:
-        return _make_agent_context(
-            agent_id, wake_on_direct=agent_id != "agent-sleep"
-        )
+        return _make_agent_context(agent_id, wake_on_direct=agent_id != "agent-sleep")
 
     state_store = AsyncMock()
     state_store.get_agent_context = AsyncMock(side_effect=_context)
@@ -179,9 +170,7 @@ async def test_returned_objects_are_change_notifications() -> None:
     event_bus = AsyncMock()
     graph = _make_graph([{"agent_id": "agent-x"}])
     state_store = AsyncMock()
-    state_store.get_agent_context = AsyncMock(
-        side_effect=lambda aid: _make_agent_context(aid)
-    )
+    state_store.get_agent_context = AsyncMock(side_effect=lambda aid: _make_agent_context(aid))
 
     router = NotificationRouter(event_bus)
     result = await router.route(_make_ingestion_result(), graph, state_store)

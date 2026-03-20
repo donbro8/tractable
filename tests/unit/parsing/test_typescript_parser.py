@@ -8,7 +8,6 @@ from tractable.parsing.parsers.typescript_parser import TypeScriptParser
 from tractable.protocols.graph_construction import CodeParser
 from tractable.types.enums import EdgeConfidence
 
-
 # ── Fixtures and sample sources ──────────────────────────────────────────────
 
 SAMPLE_SOURCE: bytes = b"""\
@@ -97,6 +96,7 @@ export declare class Greeter {}
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
+
 @pytest.fixture()
 def parser() -> TypeScriptParser:
     return TypeScriptParser()
@@ -147,6 +147,7 @@ async def test_package_import_produces_unresolved_reference(parser: TypeScriptPa
 
 # ── Additional unit tests ──────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_module_entity_always_present(parser: TypeScriptParser) -> None:
     result = await parser.parse_file("src/greeter.ts", SAMPLE_SOURCE)
@@ -166,7 +167,9 @@ async def test_function_extraction_regular(parser: TypeScriptParser) -> None:
 @pytest.mark.asyncio
 async def test_async_function_detection(parser: TypeScriptParser) -> None:
     result = await parser.parse_file("src/greeter.ts", SAMPLE_SOURCE)
-    async_fns = [e for e in result.entities if e.kind == "function" and e.properties.get("is_async")]
+    async_fns = [
+        e for e in result.entities if e.kind == "function" and e.properties.get("is_async")
+    ]
     assert any(e.name == "fetchData" for e in async_fns)
 
 
@@ -190,7 +193,9 @@ async def test_arrow_function_extraction(parser: TypeScriptParser) -> None:
 @pytest.mark.asyncio
 async def test_async_arrow_function_detection(parser: TypeScriptParser) -> None:
     result = await parser.parse_file("src/arrows.ts", ARROW_SOURCE)
-    async_fns = [e for e in result.entities if e.kind == "function" and e.properties.get("is_async")]
+    async_fns = [
+        e for e in result.entities if e.kind == "function" and e.properties.get("is_async")
+    ]
     assert any(e.name == "asyncFetch" for e in async_fns)
 
 
@@ -247,7 +252,11 @@ async def test_package_import_not_in_relationships(parser: TypeScriptParser) -> 
     # Package imports should not appear as DETERMINISTIC relationships
     import_rels = [r for r in result.relationships if r.relationship == "IMPORTS"]
     for rel in import_rels:
-        assert rel.resolution != EdgeConfidence.DETERMINISTIC or rel.target_qualified_name.startswith("./") or rel.target_qualified_name.startswith("../")
+        assert (
+            rel.resolution != EdgeConfidence.DETERMINISTIC
+            or rel.target_qualified_name.startswith("./")
+            or rel.target_qualified_name.startswith("../")
+        )
 
 
 @pytest.mark.asyncio
@@ -303,7 +312,8 @@ async def test_mixed_imports_sample(parser: TypeScriptParser) -> None:
     assert "axios" in unresolved_names
     # ./format is local → deterministic relationship
     local_rels = [
-        r for r in result.relationships
+        r
+        for r in result.relationships
         if r.relationship == "IMPORTS" and r.resolution == EdgeConfidence.DETERMINISTIC
     ]
     assert len(local_rels) >= 1

@@ -103,9 +103,7 @@ class _StubCodeGraph:
 
 def _make_store() -> PostgreSQLAgentStateStore:
     engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        engine, expire_on_commit=False
-    )
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     return PostgreSQLAgentStateStore(factory)
 
 
@@ -160,9 +158,7 @@ async def test_workflow_saves_all_four_checkpoints_to_postgres() -> None:
 
     # Query ALL checkpoint rows for this agent+task directly from PostgreSQL.
     engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        engine, expire_on_commit=False
-    )
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     async with factory() as session:
         result = await session.execute(
             select(AgentCheckpointORM)
@@ -188,6 +184,4 @@ async def test_workflow_saves_all_four_checkpoints_to_postgres() -> None:
     assert TaskPhase.COORDINATING in saved_phases, (
         f"COORDINATING checkpoint missing; phases saved: {saved_phases}"
     )
-    assert len(rows) >= 4, (
-        f"Expected at least 4 checkpoint rows; found {len(rows)}"
-    )
+    assert len(rows) >= 4, f"Expected at least 4 checkpoint rows; found {len(rows)}"

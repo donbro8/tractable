@@ -21,11 +21,10 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from tractable.agent.workflow import choose_entry_node, resume_task
 from tractable.agent.state import AgentWorkflowState
+from tractable.agent.workflow import choose_entry_node, resume_task
 from tractable.types.agent import AgentCheckpoint
 from tractable.types.enums import TaskPhase
-
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -132,7 +131,10 @@ async def test_resume_task_no_checkpoint_starts_fresh() -> None:
 
     captured_state: dict[str, Any] = {}
 
-    async def fake_ainvoke(state: Any, config: Any = None) -> dict[str, Any]:
+    # LangGraph CompiledStateGraph.ainvoke: state: dict[str, Any], config: RunnableConfig | None
+    async def fake_ainvoke(
+        state: dict[str, Any], config: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         captured_state.update(state)
         return dict(state)
 
@@ -182,23 +184,28 @@ async def test_resume_task_with_checkpoint_sets_resume_from_and_logs() -> None:
 
     captured_state: dict[str, Any] = {}
 
-    async def fake_ainvoke(state: Any, config: Any = None) -> dict[str, Any]:
+    # LangGraph CompiledStateGraph.ainvoke: state: dict[str, Any], config: RunnableConfig | None
+    async def fake_ainvoke(
+        state: dict[str, Any], config: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         captured_state.update(state)
         return dict(state)
 
     fake_workflow = MagicMock()
     fake_workflow.ainvoke = fake_ainvoke
 
-    with patch("tractable.agent.workflow.build_workflow", return_value=fake_workflow):
-        with patch("tractable.agent.workflow._log") as mock_log:
-            await resume_task(
-                agent_id="agent-1",
-                task_id="task-1",
-                task_description="Fix the test",
-                state_store=store,
-                tools={},
-                graph=MagicMock(),
-            )
+    with (
+        patch("tractable.agent.workflow.build_workflow", return_value=fake_workflow),
+        patch("tractable.agent.workflow._log") as mock_log,
+    ):
+        await resume_task(
+            agent_id="agent-1",
+            task_id="task-1",
+            task_description="Fix the test",
+            state_store=store,
+            tools={},
+            graph=MagicMock(),
+        )
 
     assert captured_state["resume_from"] == str(TaskPhase.PLANNING)
     assert captured_state["plan"] == ["Step 1"]

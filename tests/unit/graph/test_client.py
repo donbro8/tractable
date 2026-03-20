@@ -221,29 +221,29 @@ class TestTransientErrorOnConnectionFailure:
     async def test_transient_error_on_connection_failure(self) -> None:
         """AC-2: ConnectionError from redis → TransientError (not bare ConnectionError)."""
         mock_redis: Any = AsyncMock()
-        mock_redis.execute_command = AsyncMock(
-            side_effect=ConnectionError("Connection refused")
-        )
+        mock_redis.execute_command = AsyncMock(side_effect=ConnectionError("Connection refused"))
 
         with patch("tractable.graph.client.aioredis.ConnectionPool"):
             client = FalkorDBClient()
-        with patch("tractable.graph.client.aioredis.Redis", return_value=mock_redis):
-            with pytest.raises(TransientError, match="FalkorDB is unreachable"):
-                await client.execute("MATCH (e) RETURN e", {})
+        with (
+            patch("tractable.graph.client.aioredis.Redis", return_value=mock_redis),
+            pytest.raises(TransientError, match="FalkorDB is unreachable"),
+        ):
+            await client.execute("MATCH (e) RETURN e", {})
 
     @pytest.mark.asyncio
     async def test_transient_error_on_timeout(self) -> None:
         """Pool acquisition timeout → TransientError."""
         mock_redis: Any = AsyncMock()
-        mock_redis.execute_command = AsyncMock(
-            side_effect=TimeoutError("pool exhausted")
-        )
+        mock_redis.execute_command = AsyncMock(side_effect=TimeoutError("pool exhausted"))
 
         with patch("tractable.graph.client.aioredis.ConnectionPool"):
             client = FalkorDBClient()
-        with patch("tractable.graph.client.aioredis.Redis", return_value=mock_redis):
-            with pytest.raises(TransientError, match="timed out"):
-                await client.execute("MATCH (e) RETURN e", {})
+        with (
+            patch("tractable.graph.client.aioredis.Redis", return_value=mock_redis),
+            pytest.raises(TransientError, match="timed out"),
+        ):
+            await client.execute("MATCH (e) RETURN e", {})
 
 
 # ── Pool size from environment variable ───────────────────────────────────────
@@ -257,7 +257,7 @@ class TestPoolSizeFromEnv:
 
         captured: dict[str, Any] = {}
 
-        def fake_pool(**kwargs: Any) -> MagicMock:
+        def fake_pool(**kwargs: object) -> MagicMock:
             captured.update(kwargs)
             return MagicMock()
 
@@ -272,7 +272,7 @@ class TestPoolSizeFromEnv:
 
         captured: dict[str, Any] = {}
 
-        def fake_pool(**kwargs: Any) -> MagicMock:
+        def fake_pool(**kwargs: object) -> MagicMock:
             captured.update(kwargs)
             return MagicMock()
 

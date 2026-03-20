@@ -15,7 +15,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from tractable.errors import FatalError
-
 from tractable.parsing.pipeline import GraphConstructionPipeline, IngestResult
 from tractable.types.config import GitProviderConfig, RepositoryRegistration
 from tractable.types.enums import ChangeSource
@@ -68,8 +67,7 @@ def _create_python_files(directory: str, count: int = 12) -> list[str]:
     for i in range(count):
         sub = Path(directory) / f"module_{i}.py"
         sub.write_text(
-            f"def func_{i}(x: int) -> int:\n    return x + {i}\n\n"
-            f"class Class_{i}:\n    pass\n",
+            f"def func_{i}(x: int) -> int:\n    return x + {i}\n\nclass Class_{i}:\n    pass\n",
             encoding="utf-8",
         )
         created.append(str(sub))
@@ -98,9 +96,7 @@ async def test_ingest_completes_without_exception(
         registration = _make_registration(tmp)
         graph = _make_mock_graph()
 
-        with patch(
-            "tractable.parsing.pipeline.create_git_provider"
-        ) as mock_factory:
+        with patch("tractable.parsing.pipeline.create_git_provider") as mock_factory:
             mock_provider = MagicMock()
             mock_provider.clone = _make_clone_mock(tmp)
             mock_factory.return_value = mock_provider
@@ -471,7 +467,6 @@ async def test_file_parsed_structlog_event(
 
     configure_logging(env="production")
     try:
-
         with tempfile.TemporaryDirectory() as tmp:
             _create_python_files(tmp, count=2)
             registration = _make_registration(tmp)

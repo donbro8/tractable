@@ -21,7 +21,6 @@ from tractable.agent.tools.linter import LinterTool
 from tractable.agent.tools.test_runner import TestRunnerTool
 from tractable.errors import RecoverableError
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
@@ -62,9 +61,7 @@ async def test_run_tests_exit_0_returns_passed_true(tmp_path: Path) -> None:
         "tractable.agent.tools.test_runner.subprocess.run",
         return_value=_completed(0, stdout="3 passed"),
     ):
-        result = await tool.invoke(
-            {"operation": "run_tests", "test_command": "pytest tests/"}
-        )
+        result = await tool.invoke({"operation": "run_tests", "test_command": "pytest tests/"})
 
     assert result.success is True
     assert isinstance(result.output, dict)
@@ -84,9 +81,7 @@ async def test_run_tests_exit_1_returns_passed_false_with_output(tmp_path: Path)
         "tractable.agent.tools.test_runner.subprocess.run",
         return_value=_completed(1, stdout=failure_output),
     ):
-        result = await tool.invoke(
-            {"operation": "run_tests", "test_command": "pytest tests/"}
-        )
+        result = await tool.invoke({"operation": "run_tests", "test_command": "pytest tests/"})
 
     assert result.success is True
     assert result.output["passed"] is False
@@ -101,18 +96,20 @@ async def test_run_tests_exit_1_returns_passed_false_with_output(tmp_path: Path)
 async def test_run_tests_timeout_raises_recoverable_error(tmp_path: Path) -> None:
     tool = _make_test_runner(tmp_path)
 
-    with patch(
-        "tractable.agent.tools.test_runner.subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd="pytest", timeout=5),
+    with (
+        patch(
+            "tractable.agent.tools.test_runner.subprocess.run",
+            side_effect=subprocess.TimeoutExpired(cmd="pytest", timeout=5),
+        ),
+        pytest.raises(RecoverableError, match="timed out"),
     ):
-        with pytest.raises(RecoverableError, match="timed out"):
-            await tool.invoke(
-                {
-                    "operation": "run_tests",
-                    "test_command": "pytest tests/",
-                    "timeout_seconds": 5,
-                }
-            )
+        await tool.invoke(
+            {
+                "operation": "run_tests",
+                "test_command": "pytest tests/",
+                "timeout_seconds": 5,
+            }
+        )
 
 
 # ── AC-4: run_lint fix=False returns violation lines ─────────────────────────
@@ -179,9 +176,7 @@ async def test_run_tests_stdout_truncated_to_4000_chars(tmp_path: Path) -> None:
         "tractable.agent.tools.test_runner.subprocess.run",
         return_value=_completed(0, stdout=long_stdout),
     ):
-        result = await tool.invoke(
-            {"operation": "run_tests", "test_command": "pytest"}
-        )
+        result = await tool.invoke({"operation": "run_tests", "test_command": "pytest"})
 
     assert len(result.output["stdout"]) == 4000
 
@@ -195,9 +190,7 @@ async def test_run_tests_stderr_truncated_to_2000_chars(tmp_path: Path) -> None:
         "tractable.agent.tools.test_runner.subprocess.run",
         return_value=_completed(1, stderr=long_stderr),
     ):
-        result = await tool.invoke(
-            {"operation": "run_tests", "test_command": "pytest"}
-        )
+        result = await tool.invoke({"operation": "run_tests", "test_command": "pytest"})
 
     assert len(result.output["stderr"]) == 2000
 

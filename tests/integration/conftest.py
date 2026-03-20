@@ -64,9 +64,7 @@ def state_store() -> object:
     from tractable.state.store import PostgreSQLAgentStateStore
 
     engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        engine, expire_on_commit=False
-    )
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     return PostgreSQLAgentStateStore(factory)
 
 

@@ -1,7 +1,8 @@
 """Unit tests for tractable/agent/tools/git_ops.py.
 
 TASK-2.4.3 acceptance criteria:
-1. create_branch with valid name calls GitProvider.create_branch and returns ToolResult(success=True).
+1. create_branch with valid name calls GitProvider.create_branch and returns
+   ToolResult(success=True).
 2. create_branch with invalid name (not ^agent/) raises GovernanceError.
 3. stage_and_commit with empty commit_message raises RecoverableError.
 4. push calls subprocess.run with ["git", "push", "origin", branch]; token absent from args.
@@ -17,7 +18,6 @@ Additional coverage:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,7 +33,7 @@ _REPO_ID = "org/repo"
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
-def _make_tool(tmp_path: Path, *, provider: Any = None) -> GitOpsTool:
+def _make_tool(tmp_path: Path, *, provider: AsyncMock | None = None) -> GitOpsTool:
     if provider is None:
         provider = AsyncMock()
     return GitOpsTool(
@@ -114,9 +114,7 @@ async def test_create_branch_no_prefix_raises_governance_error(tmp_path: Path) -
     tool = _make_tool(tmp_path)
 
     with pytest.raises(GovernanceError):
-        await tool.invoke(
-            {"operation": "create_branch", "branch_name": "main", "from_ref": "HEAD"}
-        )
+        await tool.invoke({"operation": "create_branch", "branch_name": "main", "from_ref": "HEAD"})
 
 
 # ── AC-3: stage_and_commit with empty message raises RecoverableError ─────────
@@ -196,12 +194,8 @@ async def test_push_calls_subprocess_with_correct_args(tmp_path: Path) -> None:
     completed = MagicMock()
     completed.returncode = 0
 
-    with patch(
-        "tractable.agent.tools.git_ops.subprocess.run", return_value=completed
-    ) as mock_run:
-        result = await tool.invoke(
-            {"operation": "push", "branch_name": "agent/fix-123"}
-        )
+    with patch("tractable.agent.tools.git_ops.subprocess.run", return_value=completed) as mock_run:
+        result = await tool.invoke({"operation": "push", "branch_name": "agent/fix-123"})
 
     assert result.success is True
     mock_run.assert_called_once()
@@ -219,9 +213,11 @@ async def test_push_nonzero_exit_raises_transient_error(tmp_path: Path) -> None:
     completed.returncode = 1
     completed.stderr = "Connection refused"
 
-    with patch("tractable.agent.tools.git_ops.subprocess.run", return_value=completed):
-        with pytest.raises(TransientError):
-            await tool.invoke({"operation": "push", "branch_name": "agent/fix-123"})
+    with (
+        patch("tractable.agent.tools.git_ops.subprocess.run", return_value=completed),
+        pytest.raises(TransientError),
+    ):
+        await tool.invoke({"operation": "push", "branch_name": "agent/fix-123"})
 
 
 # ── AC-5: open_pull_request delegates to provider and returns PR URL ──────────
@@ -298,9 +294,11 @@ async def test_push_token_not_in_log_output(tmp_path: Path) -> None:
     completed = MagicMock()
     completed.returncode = 0
 
-    with structlog.testing.capture_logs() as cap_logs:
-        with patch("tractable.agent.tools.git_ops.subprocess.run", return_value=completed):
-            await tool.invoke({"operation": "push", "branch_name": "agent/fix-123"})
+    with (
+        structlog.testing.capture_logs() as cap_logs,
+        patch("tractable.agent.tools.git_ops.subprocess.run", return_value=completed),
+    ):
+        await tool.invoke({"operation": "push", "branch_name": "agent/fix-123"})
 
     for entry in cap_logs:
         for value in entry.values():

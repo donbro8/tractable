@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, patch
 
-import pytest
-from typer.testing import CliRunner
-
 from typer.testing import CliRunner
 
 from tractable.cli.main import app
@@ -16,6 +13,7 @@ runner = CliRunner()
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 # AC-5: tractable status exits 0 when no agents are registered
 def test_status_no_agents_message() -> None:

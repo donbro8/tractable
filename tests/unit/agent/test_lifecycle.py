@@ -10,21 +10,19 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from tractable.agent.lifecycle import LifecycleManager
 from tractable.errors import RecoverableError
-from tractable.types.agent import AgentContext, AgentCheckpoint, AgentStatus, AuditEntry
+from tractable.types.agent import AgentCheckpoint, AgentContext, AgentStatus, AuditEntry
 from tractable.types.enums import ChangeRelevance
-from tractable.types.temporal import AgentReactivityConfig, ChangeNotification, SyncResult
-
+from tractable.types.temporal import AgentReactivityConfig, ChangeNotification
 
 # ---------------------------------------------------------------------------
 # Helpers / fixtures
@@ -78,9 +76,7 @@ class _MockStateStore:
     async def get_agent_context(self, agent_id: str) -> AgentContext:
         return self._ctx
 
-    async def get_checkpoint(
-        self, agent_id: str, task_id: str
-    ) -> AgentCheckpoint | None:
+    async def get_checkpoint(self, agent_id: str, task_id: str) -> AgentCheckpoint | None:
         return None
 
     async def save_checkpoint(
@@ -109,9 +105,7 @@ def _make_manager(
 ) -> LifecycleManager:
     from unittest.mock import MagicMock
 
-    store = state_store or _MockStateStore(
-        initial_context=_make_context(status=status)
-    )
+    store = state_store or _MockStateStore(initial_context=_make_context(status=status))
     graph = MagicMock()
     return LifecycleManager(
         state_store=store,
@@ -185,9 +179,7 @@ async def test_notify_skips_timer_when_relevance_not_configured() -> None:
     config = AgentReactivityConfig(wake_on_direct_change=False)
 
     with patch("asyncio.get_event_loop", return_value=mock_loop):
-        manager = _make_manager(
-            reactivity_configs={"agent-1": config}
-        )
+        manager = _make_manager(reactivity_configs={"agent-1": config})
         notification = _make_notification(relevance=ChangeRelevance.DIRECT)
         await manager.notify_agent("agent-1", notification)
 
@@ -261,11 +253,9 @@ async def test_wake_agent_sets_last_active_timestamp() -> None:
 
 
 @pytest.mark.asyncio
-async def test_wake_agent_already_working_no_save(caplog: Any) -> None:
+async def test_wake_agent_already_working_no_save(caplog: object) -> None:
     """AC-3: wake_agent on WORKING state logs warning, does NOT call save."""
-    store = _MockStateStore(
-        initial_context=_make_context(status=AgentStatus.WORKING)
-    )
+    store = _MockStateStore(initial_context=_make_context(status=AgentStatus.WORKING))
     manager = _make_manager(state_store=store)
 
     await manager.wake_agent("agent-1", "direct_change")
@@ -278,17 +268,13 @@ async def test_wake_agent_already_working_logs_event() -> None:
     """AC-3: wake_agent on WORKING logs event='agent_already_working'."""
     import structlog.testing
 
-    store = _MockStateStore(
-        initial_context=_make_context(status=AgentStatus.WORKING)
-    )
+    store = _MockStateStore(initial_context=_make_context(status=AgentStatus.WORKING))
     manager = _make_manager(state_store=store)
 
     with structlog.testing.capture_logs() as logs:
         await manager.wake_agent("agent-1", "direct_change")
 
-    warning_events = [
-        e for e in logs if e.get("event") == "agent_already_working"
-    ]
+    warning_events = [e for e in logs if e.get("event") == "agent_already_working"]
     assert len(warning_events) == 1
     assert warning_events[0]["agent_id"] == "agent-1"
 

@@ -43,9 +43,7 @@ def _payload(entity_id: str, version_id: str = "v1", name: str = "test_fn") -> d
 
 async def _cleanup(graph: FalkorDBTemporalGraph, *entity_ids: str) -> None:
     for eid in entity_ids:
-        await graph._client.execute_write(
-            "MATCH (e:Entity {id: $id}) DELETE e", {"id": eid}
-        )
+        await graph._client.execute_write("MATCH (e:Entity {id: $id}) DELETE e", {"id": eid})
 
 
 # ── AC1: get_changes_since returns entities_added after create ────────────────
@@ -89,11 +87,13 @@ async def test_get_changes_since_entities_modified(graph: FalkorDBTemporalGraph)
 
     # Update to v2
     await graph.apply_mutations(
-        [TemporalMutation(
-            operation="update_entity",
-            entity_id=eid,
-            payload={**_payload(eid, vid2), "name": "updated_fn"},
-        )],
+        [
+            TemporalMutation(
+                operation="update_entity",
+                entity_id=eid,
+                payload={**_payload(eid, vid2), "name": "updated_fn"},
+            )
+        ],
         ChangeSource.HUMAN_COMMIT,
     )
 
@@ -120,11 +120,13 @@ async def test_get_entity_history_two_versions(graph: FalkorDBTemporalGraph) -> 
         ChangeSource.INITIAL_INGESTION,
     )
     await graph.apply_mutations(
-        [TemporalMutation(
-            operation="update_entity",
-            entity_id=eid,
-            payload={**_payload(eid, vid2), "name": "updated_fn"},
-        )],
+        [
+            TemporalMutation(
+                operation="update_entity",
+                entity_id=eid,
+                payload={**_payload(eid, vid2), "name": "updated_fn"},
+            )
+        ],
         ChangeSource.HUMAN_COMMIT,
     )
 
@@ -156,19 +158,19 @@ async def test_get_entity_at_returns_correct_version(graph: FalkorDBTemporalGrap
 
     # Update to v2
     await graph.apply_mutations(
-        [TemporalMutation(
-            operation="update_entity",
-            entity_id=eid,
-            payload={**_payload(eid, vid2), "name": "updated_fn"},
-        )],
+        [
+            TemporalMutation(
+                operation="update_entity",
+                entity_id=eid,
+                payload={**_payload(eid, vid2), "name": "updated_fn"},
+            )
+        ],
         ChangeSource.HUMAN_COMMIT,
     )
 
     entity = await graph.get_entity_at(eid, t_between)
     assert entity is not None, "get_entity_at returned None"
-    assert entity.version_id == vid1, (
-        f"Expected v1 ({vid1}) but got {entity.version_id}"
-    )
+    assert entity.version_id == vid1, f"Expected v1 ({vid1}) but got {entity.version_id}"
 
     await _cleanup(graph, eid)
 
@@ -185,10 +187,7 @@ async def test_get_changes_since_performance(graph: FalkorDBTemporalGraph) -> No
     n = 100
     ids = [f"{prefix}-{i}" for i in range(n)]
 
-    mutations = [
-        TemporalMutation(operation="create_entity", payload=_payload(eid))
-        for eid in ids
-    ]
+    mutations = [TemporalMutation(operation="create_entity", payload=_payload(eid)) for eid in ids]
     await graph.apply_mutations(mutations, ChangeSource.INITIAL_INGESTION)
 
     t_before = datetime.now(tz=UTC) - timedelta(minutes=1)
@@ -221,11 +220,13 @@ async def test_get_entity_history_with_since_filter(graph: FalkorDBTemporalGraph
     )
     t_after_v1 = datetime.now(tz=UTC)
     await graph.apply_mutations(
-        [TemporalMutation(
-            operation="update_entity",
-            entity_id=eid,
-            payload=_payload(eid, vid2),
-        )],
+        [
+            TemporalMutation(
+                operation="update_entity",
+                entity_id=eid,
+                payload=_payload(eid, vid2),
+            )
+        ],
         ChangeSource.HUMAN_COMMIT,
     )
 

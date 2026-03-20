@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -14,11 +14,10 @@ from tractable.types.agent import (
     ChangeVelocity,
     TemporalAgentContext,
 )
-from tractable.types.enums import TaskPhase
+from tractable.types.enums import ChangeRelevance, TaskPhase
 from tractable.types.temporal import ChangeNotification
-from tractable.types.enums import ChangeRelevance
 
-NOW = datetime(2026, 3, 17, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 3, 17, 12, 0, 0, tzinfo=UTC)
 
 
 # ── AgentContext ───────────────────────────────────────────────────────
@@ -51,8 +50,12 @@ def test_agent_context_with_values() -> None:
 
 
 def test_agent_context_defaults_independent() -> None:
-    c1 = AgentContext(agent_id="a1", base_template="t", system_prompt="p", repo_architectural_summary="s")
-    c2 = AgentContext(agent_id="a2", base_template="t", system_prompt="p", repo_architectural_summary="s")
+    c1 = AgentContext(
+        agent_id="a1", base_template="t", system_prompt="p", repo_architectural_summary="s"
+    )
+    c2 = AgentContext(
+        agent_id="a2", base_template="t", system_prompt="p", repo_architectural_summary="s"
+    )
     c1.known_patterns.append("pattern")
     assert c2.known_patterns == []
 
@@ -169,7 +172,6 @@ def test_temporal_agent_context_defaults() -> None:
 
 
 def test_temporal_agent_context_pending_notifications() -> None:
-    from tractable.types.enums import ChangeRelevance
     notif = ChangeNotification(
         target_agent_id="a1",
         repo_name="repo",
@@ -208,7 +210,11 @@ def test_temporal_agent_context_with_velocity() -> None:
 
 
 def test_temporal_agent_context_defaults_independent() -> None:
-    c1 = TemporalAgentContext(agent_id="a1", base_template="t", system_prompt="p", repo_architectural_summary="s")
-    c2 = TemporalAgentContext(agent_id="a2", base_template="t", system_prompt="p", repo_architectural_summary="s")
+    c1 = TemporalAgentContext(
+        agent_id="a1", base_template="t", system_prompt="p", repo_architectural_summary="s"
+    )
+    c2 = TemporalAgentContext(
+        agent_id="a2", base_template="t", system_prompt="p", repo_architectural_summary="s"
+    )
     c1.known_patterns.append("x")
     assert c2.known_patterns == []

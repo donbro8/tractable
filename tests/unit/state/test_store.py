@@ -11,12 +11,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from tractable.errors import RecoverableError, TransientError
 from tractable.protocols.agent_state_store import AgentStateStore
-from tractable.state.models import AgentContextORM, AgentCheckpointORM, AuditEntryORM
+from tractable.state.models import AgentCheckpointORM, AgentContextORM, AuditEntryORM
 from tractable.state.store import PostgreSQLAgentStateStore, _orm_to_context
 from tractable.types.agent import AgentCheckpoint, AgentContext, AuditEntry
 from tractable.types.enums import TaskPhase
-from tractable.errors import RecoverableError, TransientError
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
@@ -127,13 +127,14 @@ class TestGetAgentContext:
             await store.get_agent_context("agent-1")
 
 
-
 # ── Error Mapping ─────────────────────────────────────────────────────────────
+
 
 class TestDbErrorMapping:
     @pytest.mark.asyncio
     async def test_operational_error_mapped_to_transient(self) -> None:
         from sqlalchemy.exc import OperationalError
+
         store, mock_session = make_store()
         mock_session.execute = AsyncMock(side_effect=OperationalError("select", "params", "orig"))
         with pytest.raises(TransientError, match="Database connection lost"):
@@ -141,9 +142,8 @@ class TestDbErrorMapping:
 
     @pytest.mark.asyncio
     async def test_timeout_error_mapped_to_transient(self) -> None:
-        import asyncio
         store, mock_session = make_store()
-        mock_session.execute = AsyncMock(side_effect=asyncio.TimeoutError("timeout"))
+        mock_session.execute = AsyncMock(side_effect=TimeoutError("timeout"))
         with pytest.raises(TransientError, match="timed out"):
             await store.get_checkpoint("agent-1", "task-1")
 
@@ -151,6 +151,7 @@ class TestDbErrorMapping:
     async def test_transient_error_on_db_unreachable(self) -> None:
         """AC-2: get_agent_context raises TransientError when DB is unreachable."""
         from sqlalchemy.exc import OperationalError
+
         store, mock_session = make_store()
         mock_session.get = AsyncMock(side_effect=OperationalError("connect", "params", "orig"))
         with pytest.raises(TransientError, match="unreachable"):
@@ -159,10 +160,12 @@ class TestDbErrorMapping:
     @pytest.mark.asyncio
     async def test_integrity_error_mapped_to_recoverable(self) -> None:
         from sqlalchemy.exc import IntegrityError
+
         store, mock_session = make_store()
         mock_session.execute = AsyncMock(side_effect=IntegrityError("insert", "params", "orig"))
         with pytest.raises(RecoverableError, match="integrity constraint violated"):
             await store.save_agent_context("agent-1", make_context())
+
 
 # ── save_agent_context ────────────────────────────────────────────────────────
 
@@ -234,11 +237,11 @@ class TestSaveCheckpoint:
         cp = make_checkpoint()
         with patch("tractable.state.store.log.info") as mock_info:
             await store.save_checkpoint("agent-1", "task-42", cp)
-        
+
         assert len(added) == 1
         assert isinstance(added[0], AgentCheckpointORM)
         assert added[0].task_id == "task-42"
-        
+
         mock_info.assert_called_once_with(
             "checkpoint_saved",
             agent_id="agent-1",
@@ -259,12 +262,12 @@ class TestAppendAuditEntry:
         entry = make_audit_entry()
         with patch("tractable.state.store.log.info") as mock_info:
             await store.append_audit_entry(entry)
-        
+
         assert len(added) == 1
         assert isinstance(added[0], AuditEntryORM)
         assert added[0].outcome == "success"
         assert added[0].action == "file_write"
-        
+
         mock_info.assert_called_once_with(
             "audit_entry_appended",
             agent_id="agent-1",

@@ -25,13 +25,14 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock
 
 import pytest
 import structlog.testing
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tractable.agent.workflow import resume_task
+from tractable.protocols.tool import Tool, ToolResult
+from tractable.state.store import PostgreSQLAgentStateStore
 from tractable.types.agent import AgentCheckpoint, AgentContext
 from tractable.types.enums import ChangeRisk, TaskPhase
 from tractable.types.graph import (
@@ -41,8 +42,6 @@ from tractable.types.graph import (
     RepoGraphSummary,
     Subgraph,
 )
-from tractable.protocols.tool import Tool, ToolResult
-from tractable.state.store import PostgreSQLAgentStateStore
 
 _DATABASE_URL = os.environ.get(
     "DATABASE_URL",
@@ -116,9 +115,7 @@ class _CallTrackingTool:
 
 def _make_store() -> PostgreSQLAgentStateStore:
     engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        engine, expire_on_commit=False
-    )
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     return PostgreSQLAgentStateStore(factory)
 
 

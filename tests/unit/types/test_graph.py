@@ -155,7 +155,14 @@ def test_repo_graph_summary_instantiation() -> None:
 
 
 def test_graph_mutation_valid_operations() -> None:
-    for op in ("create_node", "update_node", "delete_node", "create_edge", "update_edge", "delete_edge"):
+    for op in (
+        "create_node",
+        "update_node",
+        "delete_node",
+        "create_edge",
+        "update_edge",
+        "delete_edge",
+    ):
         m = GraphMutation(operation=op, payload={"id": "x"})  # type: ignore[arg-type]
         assert m.operation == op
 

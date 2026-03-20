@@ -33,10 +33,9 @@ NOW = datetime(2026, 3, 19, 10, 0, 0, tzinfo=UTC)
 @pytest.fixture()
 def store() -> PostgreSQLAgentStateStore:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
     engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        engine, expire_on_commit=False
-    )
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     return PostgreSQLAgentStateStore(factory)
 
 

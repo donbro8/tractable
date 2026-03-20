@@ -148,9 +148,7 @@ class TestApplyMutationsCreate:
                 "file_path": "src/foo.py",
             },
         )
-        result = await graph.apply_mutations(
-            [mutation], ChangeSource.INITIAL_INGESTION
-        )
+        result = await graph.apply_mutations([mutation], ChangeSource.INITIAL_INGESTION)
         mock.execute_write.assert_called_once()
         cypher: str = mock.execute_write.call_args[0][0]
         assert "CREATE (e:Entity" in cypher
@@ -187,9 +185,15 @@ class TestApplyMutationsUpdate:
         mutation = TemporalMutation(
             operation="update_entity",
             entity_id="e-1",
-            payload={"version_id": "v-2", "id": "e-1", "kind": "function",
-                     "name": "foo", "qualified_name": "repo.foo",
-                     "repo": "myrepo", "file_path": "src/foo.py"},
+            payload={
+                "version_id": "v-2",
+                "id": "e-1",
+                "kind": "function",
+                "name": "foo",
+                "qualified_name": "repo.foo",
+                "repo": "myrepo",
+                "file_path": "src/foo.py",
+            },
         )
         result = await graph.apply_mutations([mutation], ChangeSource.HUMAN_COMMIT)
         assert mock.execute_write.call_count == 2
@@ -294,8 +298,14 @@ class TestImpactAnalysisCurrent:
     @pytest.mark.asyncio
     async def test_risk_escalates_with_affected_count(self) -> None:
         rows: list[dict[str, Any]] = [
-            {"id": f"e-{i}", "kind": "fn", "name": f"f{i}",
-             "repo": "r", "file_path": f"f{i}.py", "confidence": 1.0}
+            {
+                "id": f"e-{i}",
+                "kind": "fn",
+                "name": f"f{i}",
+                "repo": "r",
+                "file_path": f"f{i}.py",
+                "confidence": 1.0,
+            }
             for i in range(25)
         ]
         graph, _ = make_graph(execute_return=rows)
@@ -320,9 +330,7 @@ class TestMutationErrors:
     @pytest.mark.asyncio
     async def test_successful_mutations_counted_despite_earlier_error(self) -> None:
         graph, mock = make_graph()
-        mock.execute_write = AsyncMock(
-            side_effect=[RuntimeError("fail"), None]
-        )
+        mock.execute_write = AsyncMock(side_effect=[RuntimeError("fail"), None])
         mutations = [
             TemporalMutation(operation="create_entity", payload={"id": "e-1"}),
             TemporalMutation(operation="create_entity", payload={"id": "e-2"}),
@@ -346,12 +354,14 @@ class TestInjectFilterMalformedQuery:
 
         # Patch _inject_current_filter at the module level so query_current
         # sees a result that lacks the validity filter.
-        with patch(
-            "tractable.graph.temporal_graph._inject_current_filter",
-            return_value="MATCH (e:Entity) RETURN e",  # missing valid_until IS NULL
+        with (
+            patch(
+                "tractable.graph.temporal_graph._inject_current_filter",
+                return_value="MATCH (e:Entity) RETURN e",  # missing valid_until IS NULL
+            ),
+            pytest.raises(RecoverableError, match="malformed query"),
         ):
-            with pytest.raises(RecoverableError, match="malformed query"):
-                await graph.query_current("MATCH (e:Entity) RETURN e")
+            await graph.query_current("MATCH (e:Entity) RETURN e")
 
 
 # ── AC-4: structlog entry on apply_mutations ───────────────────────────────────

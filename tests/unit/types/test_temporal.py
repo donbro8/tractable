@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -20,12 +20,15 @@ from tractable.types.temporal import (
     TemporalMutationResult,
 )
 
-T0 = datetime(2026, 3, 17, 10, 0, 0, tzinfo=timezone.utc)
-T1 = datetime(2026, 3, 17, 11, 0, 0, tzinfo=timezone.utc)
-T2 = datetime(2026, 3, 17, 12, 0, 0, tzinfo=timezone.utc)
+T0 = datetime(2026, 3, 17, 10, 0, 0, tzinfo=UTC)
+T1 = datetime(2026, 3, 17, 11, 0, 0, tzinfo=UTC)
+T2 = datetime(2026, 3, 17, 12, 0, 0, tzinfo=UTC)
 
 
-def _meta(valid_until: datetime | None = None, source: ChangeSource = ChangeSource.INITIAL_INGESTION) -> TemporalMetadata:
+def _meta(
+    valid_until: datetime | None = None,
+    source: ChangeSource = ChangeSource.INITIAL_INGESTION,
+) -> TemporalMetadata:
     return TemporalMetadata(
         valid_from=T0,
         valid_until=valid_until,
@@ -192,7 +195,14 @@ def test_graph_diff_for_repo_returns_graph_diff() -> None:
 
 
 def test_temporal_mutation_valid_operations() -> None:
-    for op in ("create_entity", "update_entity", "delete_entity", "create_edge", "update_edge", "delete_edge"):
+    for op in (
+        "create_entity",
+        "update_entity",
+        "delete_entity",
+        "create_edge",
+        "update_edge",
+        "delete_edge",
+    ):
         m = TemporalMutation(operation=op)  # type: ignore[arg-type]
         assert m.operation == op
 

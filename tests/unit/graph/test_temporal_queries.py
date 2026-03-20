@@ -97,18 +97,21 @@ class TestComputeChangedFields:
         row_v1 = entity_row("e-1", "v-1", name="foo")
         row_v2 = entity_row("e-1", "v-2", name="foo")
         from tractable.graph.temporal_graph import _row_to_entity
+
         e1 = _row_to_entity(row_v1)
         e2 = _row_to_entity(row_v2)
         assert _compute_changed_fields(e1, e2) == []
 
     def test_name_change_detected(self) -> None:
         from tractable.graph.temporal_graph import _row_to_entity
+
         e1 = _row_to_entity(entity_row(name="old_name"))
         e2 = _row_to_entity(entity_row(name="new_name"))
         assert "name" in _compute_changed_fields(e1, e2)
 
     def test_file_path_change_detected(self) -> None:
         from tractable.graph.temporal_graph import _row_to_entity
+
         row1 = entity_row()
         row2 = entity_row()
         row2["file_path"] = "src/new.py"

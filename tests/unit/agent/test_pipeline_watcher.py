@@ -22,7 +22,6 @@ Additional coverage:
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -33,13 +32,12 @@ from tractable.errors import GovernanceError
 from tractable.types.enums import TaskPhase
 from tractable.types.git import CheckRunInfo
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def _make_tool(
     *,
-    provider: Any = None,
+    provider: AsyncMock | None = None,
     repo_id: str = "org/repo",
 ) -> PipelineWatcherTool:
     if provider is None:
@@ -57,11 +55,13 @@ def _passing_run(name: str = "ci") -> CheckRunInfo:
     return CheckRunInfo(name=name, status="completed", conclusion="success", log_url=None)
 
 
-def _failed_run(name: str = "ci", log_url: str | None = "https://logs.example.com/1") -> CheckRunInfo:
+def _failed_run(
+    name: str = "ci", log_url: str | None = "https://logs.example.com/1"
+) -> CheckRunInfo:
     return CheckRunInfo(name=name, status="completed", conclusion="failure", log_url=log_url)
 
 
-def _base_triage_state(**overrides: Any) -> TriageState:
+def _base_triage_state(**overrides: object) -> TriageState:
     state: TriageState = {
         "agent_id": "agent-test",
         "task_id": "task-test",

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 import pytest_asyncio
@@ -53,7 +53,7 @@ async def redis_client() -> object:
 def _sample_event(suffix: str = "") -> AgentEvent:
     return AgentEvent(
         event_id=f"test-event-{suffix}",
-        timestamp=datetime.now(tz=timezone.utc),
+        timestamp=datetime.now(tz=UTC),
         source_agent_id="test-source",
         target_agent_id="test-target",
         event_type="test.ping",
@@ -84,7 +84,7 @@ async def test_publish_subscribe_roundtrip(redis_client: object) -> None:
     received: AgentEvent | None = None
     try:
         received = await asyncio.wait_for(sub_iter.__anext__(), timeout=5.0)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         pytest.fail("Timed out waiting for published event on subscription")
 
     assert received is not None

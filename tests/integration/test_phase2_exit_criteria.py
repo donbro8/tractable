@@ -70,9 +70,7 @@ def _skip_if_postgres_unavailable() -> None:
 
     engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True)
     try:
-        asyncio.get_event_loop().run_until_complete(
-            engine.connect().__aenter__()
-        )
+        asyncio.get_event_loop().run_until_complete(engine.connect().__aenter__())
     except Exception:
         pytest.skip(
             f"PostgreSQL not reachable at {_DATABASE_URL}. "
@@ -106,9 +104,7 @@ def state_store() -> PostgreSQLAgentStateStore:
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
     engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True)
-    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(
-        engine, expire_on_commit=False
-    )
+    factory: async_sessionmaker[AsyncSession] = async_sessionmaker(engine, expire_on_commit=False)
     return PostgreSQLAgentStateStore(factory)
 
 
@@ -155,9 +151,7 @@ async def test_task_to_pr(state_store: PostgreSQLAgentStateStore) -> None:
 
     agent_id = f"ec1-agent-{uuid.uuid4().hex[:8]}"
     task_id = f"ec1-task-{uuid.uuid4().hex[:8]}"
-    pr_url = (
-        f"https://github.com/fixture/fixture-python-api/pull/{uuid.uuid4().hex[:4]}"
-    )
+    pr_url = f"https://github.com/fixture/fixture-python-api/pull/{uuid.uuid4().hex[:4]}"
 
     # Persist agent context so state_store.get_agent_context succeeds if called.
     ctx = _make_agent_context(agent_id, repo="fixture-python-api")
@@ -193,12 +187,8 @@ async def test_task_to_pr(state_store: PostgreSQLAgentStateStore) -> None:
     )
 
     # EC1 assertions
-    assert result["phase"] == TaskPhase.COMPLETED, (
-        f"Expected COMPLETED, got {result['phase']}"
-    )
-    assert result["pr_url"] == pr_url, (
-        f"Expected pr_url={pr_url!r}, got {result['pr_url']!r}"
-    )
+    assert result["phase"] == TaskPhase.COMPLETED, f"Expected COMPLETED, got {result['phase']}"
+    assert result["pr_url"] == pr_url, f"Expected pr_url={pr_url!r}, got {result['pr_url']!r}"
 
 
 # ── EC2: test_checkpoint_resume ───────────────────────────────────────────────
@@ -289,12 +279,8 @@ async def test_checkpoint_resume(state_store: PostgreSQLAgentStateStore) -> None
         f"Expected 0 PLANNING calls on restore (checkpoint resume); got {second_run_count}"
     )
 
-    checkpoint_events = [
-        r for r in captured_logs if r.get("event") == "checkpoint_restored"
-    ]
-    assert checkpoint_events, (
-        "Expected 'checkpoint_restored' in structlog output on second run"
-    )
+    checkpoint_events = [r for r in captured_logs if r.get("event") == "checkpoint_restored"]
+    assert checkpoint_events, "Expected 'checkpoint_restored' in structlog output on second run"
 
 
 # ── EC3: test_agent_wake_on_webhook ───────────────────────────────────────────
@@ -346,9 +332,7 @@ async def test_agent_wake_on_webhook(state_store: PostgreSQLAgentStateStore) -> 
 
     # Sign with the configured webhook secret (default: empty string).
     webhook_secret = os.environ.get("GITHUB_WEBHOOK_SECRET", "")
-    sig = "sha256=" + hmac.new(
-        webhook_secret.encode(), body, hashlib.sha256
-    ).hexdigest()
+    sig = "sha256=" + hmac.new(webhook_secret.encode(), body, hashlib.sha256).hexdigest()
 
     req = urllib.request.Request(
         f"{_TRACTABLE_URL}/webhooks/github",
@@ -522,12 +506,8 @@ async def test_audit_log_completeness(
     entries = await state_store.get_audit_log(task_id=task_id)
     actions = {e.action for e in entries}
 
-    assert "file_written" in actions, (
-        f"Expected 'file_written' in audit actions; got {actions}"
-    )
-    assert "graph_query" in actions, (
-        f"Expected 'graph_query' in audit actions; got {actions}"
-    )
+    assert "file_written" in actions, f"Expected 'file_written' in audit actions; got {actions}"
+    assert "graph_query" in actions, f"Expected 'graph_query' in audit actions; got {actions}"
     assert "pull_request_created" in actions, (
         f"Expected 'pull_request_created' in audit actions; got {actions}"
     )
@@ -656,8 +636,7 @@ async def test_register_two_repos(
     agent_map = {a.agent_id: a for a in agents}
 
     assert py_agent_id in agent_map, (
-        f"Python agent {py_agent_id!r} not found in agent list. "
-        f"Present agents: {list(agent_map)}"
+        f"Python agent {py_agent_id!r} not found in agent list. Present agents: {list(agent_map)}"
     )
     assert ts_agent_id in agent_map, (
         f"TypeScript agent {ts_agent_id!r} not found in agent list. "
@@ -666,9 +645,7 @@ async def test_register_two_repos(
 
     for aid in (py_agent_id, ts_agent_id):
         status = agent_map[aid].user_overrides.get("status")
-        assert status == "DORMANT", (
-            f"Agent {aid!r} expected status DORMANT; got {status!r}"
-        )
+        assert status == "DORMANT", f"Agent {aid!r} expected status DORMANT; got {status!r}"
 
     await client.close()
 

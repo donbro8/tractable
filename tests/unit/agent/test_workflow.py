@@ -11,19 +11,15 @@ Covers:
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
 from tractable.agent.state import AgentWorkflowState
 from tractable.agent.workflow import build_workflow
-from tractable.protocols.agent_state_store import AgentStateStore
-from tractable.protocols.code_graph import CodeGraph
-from tractable.protocols.tool import Tool, ToolResult
+from tractable.protocols.tool import ToolResult
 from tractable.types.agent import AgentCheckpoint, AgentContext, AuditEntry
 from tractable.types.enums import TaskPhase
 from tractable.types.graph import (
@@ -77,14 +73,10 @@ class _MockStateStore:
             repo_architectural_summary="",
         )
 
-    async def save_agent_context(
-        self, agent_id: str, context: AgentContext
-    ) -> None:
+    async def save_agent_context(self, agent_id: str, context: AgentContext) -> None:
         pass
 
-    async def get_checkpoint(
-        self, agent_id: str, task_id: str
-    ) -> AgentCheckpoint | None:
+    async def get_checkpoint(self, agent_id: str, task_id: str) -> AgentCheckpoint | None:
         return None
 
     async def save_checkpoint(
@@ -140,9 +132,7 @@ class _MockGraph:
             risk_level=ChangeRisk.LOW,
         )
 
-    async def get_repo_boundary_edges(
-        self, repo_name: str
-    ) -> Sequence[CrossRepoEdge]:
+    async def get_repo_boundary_edges(self, repo_name: str) -> Sequence[CrossRepoEdge]:
         return []
 
     async def get_repo_summary(self, repo_name: str) -> RepoGraphSummary:
@@ -155,14 +145,8 @@ class _MockGraph:
             summary_text="Test repo summary",
         )
 
-    async def mutate(
-        self, mutations: Sequence[Any]
-    ) -> MutationResult:
+    async def mutate(self, mutations: Sequence[Any]) -> MutationResult:
         return MutationResult(applied=0)
-
-
-def _run(coro: Any) -> Any:
-    return asyncio.get_event_loop().run_until_complete(coro)
 
 
 # ---------------------------------------------------------------------------
@@ -249,9 +233,7 @@ async def test_planning_node_saves_checkpoint() -> None:
     async for _ in compiled.astream(initial, config=config):
         pass
 
-    planning_checkpoints = [
-        c for c in store.saved_checkpoints if c.phase == TaskPhase.PLANNING
-    ]
+    planning_checkpoints = [c for c in store.saved_checkpoints if c.phase == TaskPhase.PLANNING]
     assert len(planning_checkpoints) >= 1
     assert planning_checkpoints[0].task_id == "task-a"
 
@@ -274,9 +256,7 @@ async def test_executing_node_saves_checkpoint() -> None:
     async for _ in compiled.astream(initial, config=config):
         pass
 
-    executing_checkpoints = [
-        c for c in store.saved_checkpoints if c.phase == TaskPhase.EXECUTING
-    ]
+    executing_checkpoints = [c for c in store.saved_checkpoints if c.phase == TaskPhase.EXECUTING]
     assert len(executing_checkpoints) >= 1
     assert executing_checkpoints[0].task_id == "task-b"
 
@@ -355,14 +335,10 @@ async def test_reviewing_retries_when_gate_fails() -> None:
         pass
 
     # EXECUTING should have been entered twice (initial + retry)
-    executing_checkpoints = [
-        c for c in store.saved_checkpoints if c.phase == TaskPhase.EXECUTING
-    ]
+    executing_checkpoints = [c for c in store.saved_checkpoints if c.phase == TaskPhase.EXECUTING]
     assert len(executing_checkpoints) == 2
     # Workflow should still complete
-    reviewing_after_retry = [
-        c for c in store.saved_checkpoints if c.phase == TaskPhase.REVIEWING
-    ]
+    reviewing_after_retry = [c for c in store.saved_checkpoints if c.phase == TaskPhase.REVIEWING]
     assert len(reviewing_after_retry) == 2
 
 

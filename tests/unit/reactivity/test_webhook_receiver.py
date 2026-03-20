@@ -13,8 +13,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from collections.abc import Sequence
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -29,7 +28,6 @@ from tractable.protocols.reactivity import (
 )
 from tractable.reactivity.ingestion_pipeline import GitChangeIngestionPipeline
 from tractable.reactivity.webhook_receiver import (
-    create_webhook_router,
     verify_signature,
 )
 from tractable.registry.api import create_app
@@ -89,7 +87,7 @@ def _noop_mutation_result() -> TemporalMutationResult:
         entities_deleted=0,
         edges_created=0,
         edges_deleted=0,
-        timestamp=datetime.now(tz=timezone.utc),
+        timestamp=datetime.now(tz=UTC),
     )
 
 
@@ -172,9 +170,7 @@ async def test_three_file_push_calls_correct_counts() -> None:
     # Parser returns an empty result (no entities extracted).
     parser = MagicMock()
     type(parser).supported_extensions = property(lambda _: frozenset({".py"}))
-    parser.parse_file = AsyncMock(
-        return_value=ParseResult(file_path="x.py", language="python")
-    )
+    parser.parse_file = AsyncMock(return_value=ParseResult(file_path="x.py", language="python"))
 
     # Redis: no duplicate
     redis = AsyncMock()
@@ -200,12 +196,12 @@ async def test_three_file_push_calls_correct_counts() -> None:
                 sha="sha1",
                 message="fix",
                 author="dev",
-                timestamp=datetime.now(tz=timezone.utc),
+                timestamp=datetime.now(tz=UTC),
                 modified_files=files,
             )
         ],
         author="dev",
-        timestamp=datetime.now(tz=timezone.utc),
+        timestamp=datetime.now(tz=UTC),
     )
 
     await pipeline.process_change(event)
@@ -245,7 +241,7 @@ async def test_duplicate_event_returns_noop() -> None:
         after_sha="abc123",
         commits=[],
         author="dev",
-        timestamp=datetime.now(tz=timezone.utc),
+        timestamp=datetime.now(tz=UTC),
     )
 
     result = await pipeline.process_change(event)
@@ -304,12 +300,12 @@ async def test_parse_failure_continues_remaining_files() -> None:
                 sha="sha1",
                 message="fix",
                 author="dev",
-                timestamp=datetime.now(tz=timezone.utc),
+                timestamp=datetime.now(tz=UTC),
                 modified_files=files,
             )
         ],
         author="dev",
-        timestamp=datetime.now(tz=timezone.utc),
+        timestamp=datetime.now(tz=UTC),
     )
 
     result = await pipeline.process_change(event)

@@ -7,7 +7,6 @@ import pytest
 from tractable.parsing.parsers.python_parser import PythonParser
 from tractable.protocols.graph_construction import CodeParser
 
-
 # ── Fixtures ────────────────────────────────────────────────────────────────
 
 SAMPLE_SOURCE: bytes = b'''\
@@ -31,7 +30,7 @@ def plain_func() -> None:
     pass
 '''
 
-DECORATED_SOURCE: bytes = b'''\
+DECORATED_SOURCE: bytes = b"""\
 import functools
 
 def my_decorator(fn):
@@ -45,24 +44,25 @@ async def decorated_async(x: int) -> int:
 @my_decorator
 class DecoratedClass:
     pass
-'''
+"""
 
-SYNTAX_ERROR_SOURCE: bytes = b'''\
+SYNTAX_ERROR_SOURCE: bytes = b"""\
 def foo(:
     pass
-'''
+"""
 
-CALL_SOURCE: bytes = b'''\
+CALL_SOURCE: bytes = b"""\
 def helper() -> None:
     pass
 
 def caller() -> None:
     helper()
     os.path.join("a", "b")
-'''
+"""
 
 
 # ── Tests ────────────────────────────────────────────────────────────────────
+
 
 @pytest.fixture()
 def parser() -> PythonParser:
@@ -169,11 +169,7 @@ async def test_module_entity_always_present(parser: PythonParser) -> None:
 async def test_method_detection(parser: PythonParser) -> None:
     """Methods inside a class have is_method=True."""
     result = await parser.parse_file("sample.py", SAMPLE_SOURCE)
-    methods = [
-        e
-        for e in result.entities
-        if e.kind == "function" and e.properties.get("is_method")
-    ]
+    methods = [e for e in result.entities if e.kind == "function" and e.properties.get("is_method")]
     method_names = {e.name for e in methods}
     assert "__init__" in method_names or "get_value" in method_names
 

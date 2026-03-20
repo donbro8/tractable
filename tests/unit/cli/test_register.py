@@ -5,21 +5,18 @@ from __future__ import annotations
 import subprocess
 import textwrap
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-from typer.testing import CliRunner
+from unittest.mock import AsyncMock, patch
 
 from typer.testing import CliRunner
 
 from tractable.cli.main import app
 from tractable.errors import FatalError
 
-
 runner = CliRunner()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
 
 def _valid_config(tmp_path: Path) -> Path:
     """Write a minimal valid RepositoryRegistration config to a temp file."""
@@ -73,6 +70,7 @@ def _no_registration_config(tmp_path: Path) -> Path:
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 # AC-1: --help lists register and status
 def test_help_lists_register_and_status() -> None:

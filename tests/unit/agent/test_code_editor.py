@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
@@ -25,7 +24,6 @@ from tractable.errors import GovernanceError
 from tractable.types.agent import AuditEntry
 from tractable.types.config import AgentScope, GovernancePolicy, SensitivePathRule
 
-
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 
@@ -34,7 +32,7 @@ def _make_tool(
     *,
     scope: AgentScope | None = None,
     governance: GovernancePolicy | None = None,
-    state_store: Any = None,
+    state_store: AsyncMock | None = None,
 ) -> CodeEditorTool:
     if scope is None:
         scope = AgentScope()
@@ -61,9 +59,7 @@ async def test_write_file_within_allowed_paths_succeeds(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     tool = _make_tool(tmp_path, scope=AgentScope(allowed_paths=["src/"]))
 
-    result = await tool.invoke(
-        {"operation": "write_file", "path": "src/main.py", "content": "x=1"}
-    )
+    result = await tool.invoke({"operation": "write_file", "path": "src/main.py", "content": "x=1"})
 
     assert result.success is True
     assert (tmp_path / "src" / "main.py").read_text() == "x=1"
@@ -77,9 +73,7 @@ async def test_write_file_path_traversal_raises_governance_error(tmp_path: Path)
     tool = _make_tool(tmp_path)
 
     with pytest.raises(GovernanceError):
-        await tool.invoke(
-            {"operation": "write_file", "path": "src/../secrets.env", "content": "x"}
-        )
+        await tool.invoke({"operation": "write_file", "path": "src/../secrets.env", "content": "x"})
 
 
 # ── AC-3: write_file outside allowed_paths raises GovernanceError + AuditEntry
@@ -172,13 +166,13 @@ async def test_write_file_produces_structlog_event(tmp_path: Path) -> None:
         )
 
     assert result.success is True
-    assert any(
-        entry.get("event") == "file_written" for entry in captured
-    ), f"Expected file_written log event, got: {captured}"
+    assert any(entry.get("event") == "file_written" for entry in captured), (
+        f"Expected file_written log event, got: {captured}"
+    )
 
     written_events = [e for e in captured if e.get("event") == "file_written"]
     assert written_events[0]["file_path"] == str((tmp_path / "src" / "main.py").resolve())
-    assert written_events[0]["bytes_written"] == len("hello".encode())
+    assert written_events[0]["bytes_written"] == len(b"hello")
 
 
 # ── Additional coverage: deny_paths on write_file ────────────────────────────
@@ -201,9 +195,7 @@ async def test_write_file_on_deny_paths_raises_governance_error(tmp_path: Path) 
 @pytest.mark.asyncio
 async def test_write_file_empty_allowed_paths_permits_all(tmp_path: Path) -> None:
     tool = _make_tool(tmp_path, scope=AgentScope(allowed_paths=[]))
-    result = await tool.invoke(
-        {"operation": "write_file", "path": "anywhere.py", "content": "x"}
-    )
+    result = await tool.invoke({"operation": "write_file", "path": "anywhere.py", "content": "x"})
     assert result.success is True
 
 
@@ -217,9 +209,7 @@ async def test_write_file_sibling_dir_not_matched_by_allowed_paths(tmp_path: Pat
     tool = _make_tool(tmp_path, scope=AgentScope(allowed_paths=["src/"]))
 
     with pytest.raises(GovernanceError):
-        await tool.invoke(
-            {"operation": "write_file", "path": "src_extra/file.py", "content": "x"}
-        )
+        await tool.invoke({"operation": "write_file", "path": "src_extra/file.py", "content": "x"})
 
 
 @pytest.mark.asyncio
@@ -253,9 +243,7 @@ async def test_sensitive_path_blocked_appends_audit_entry(tmp_path: Path) -> Non
     tool = _make_tool(tmp_path, governance=governance, state_store=state_store)
 
     with pytest.raises(GovernanceError):
-        await tool.invoke(
-            {"operation": "write_file", "path": "src/auth/tokens.py", "content": "x"}
-        )
+        await tool.invoke({"operation": "write_file", "path": "src/auth/tokens.py", "content": "x"})
 
     await asyncio.sleep(0)
     state_store.append_audit_entry.assert_called_once()

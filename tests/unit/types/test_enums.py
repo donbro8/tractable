@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 from pydantic import BaseModel
 
 from tractable.types.enums import (
@@ -22,7 +21,6 @@ from tractable.types.enums import (
     EdgeConfidence,
     TaskPhase,
 )
-
 
 # ── AutonomyLevel ──────────────────────────────────────────────────────
 

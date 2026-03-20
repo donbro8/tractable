@@ -6,7 +6,7 @@ Covers:
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -19,7 +19,7 @@ from tractable.protocols.event_bus import AgentEvent
 def _sample_event() -> AgentEvent:
     return AgentEvent(
         event_id="ev-unit-001",
-        timestamp=datetime.now(tz=timezone.utc),
+        timestamp=datetime.now(tz=UTC),
         source_agent_id="agent-a",
         target_agent_id="agent-b",
         event_type="test.ping",

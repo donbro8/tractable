@@ -6,28 +6,24 @@ import pytest
 from pydantic import ValidationError
 
 from tractable.types.config import (
+    # Capability constants
+    CODE_READ,
+    CODE_WRITE,
+    DB_MIGRATE,
+    PR_MERGE,
     TEMPLATE_REGISTRY,
+    TERRAFORM_APPLY,
     AgentInstanceConfig,
     AgentReactivityConfig,
     AgentScope,
-    AgentTemplate,
     Capability,
     ContextConfig,
-    CrossRepoChangePolicy,
-    DependencyDeclaration,
     GitProviderConfig,
     GovernancePolicy,
     RepositoryRegistration,
     SensitivePathRule,
-    # Capability constants
-    CODE_READ,
-    CODE_WRITE,
-    PR_MERGE,
-    TERRAFORM_APPLY,
-    DB_MIGRATE,
 )
 from tractable.types.enums import AgentStatus, AutonomyLevel, ChangeRisk
-
 
 # ── Capability ─────────────────────────────────────────────────────────
 
@@ -69,13 +65,26 @@ def test_all_18_capability_constants_importable() -> None:
         TERRAFORM_PLAN,
         TEST_RUN,
     )
+
     constants = [
-        CODE_READ, CODE_WRITE, TEST_RUN, LINT_RUN,
-        GRAPH_QUERY_SCOPED, GRAPH_QUERY_GLOBAL,
-        PR_CREATE, PR_MERGE, BRANCH_CREATE, DEPENDENCY_UPDATE,
-        SPAWN_SUBAGENT, MESSAGE_AGENTS,
-        TERRAFORM_PLAN, TERRAFORM_APPLY,
-        CDK_SYNTH, CDK_DEPLOY, K8S_APPLY, DB_MIGRATE,
+        CODE_READ,
+        CODE_WRITE,
+        TEST_RUN,
+        LINT_RUN,
+        GRAPH_QUERY_SCOPED,
+        GRAPH_QUERY_GLOBAL,
+        PR_CREATE,
+        PR_MERGE,
+        BRANCH_CREATE,
+        DEPENDENCY_UPDATE,
+        SPAWN_SUBAGENT,
+        MESSAGE_AGENTS,
+        TERRAFORM_PLAN,
+        TERRAFORM_APPLY,
+        CDK_SYNTH,
+        CDK_DEPLOY,
+        K8S_APPLY,
+        DB_MIGRATE,
     ]
     assert len(constants) == 18
     names = {c.name for c in constants}
@@ -125,8 +134,13 @@ def test_context_config_defaults() -> None:
 
 def test_template_registry_has_5_templates() -> None:
     assert len(TEMPLATE_REGISTRY) == 5
-    expected = {"api_maintainer", "infra_maintainer", "frontend_maintainer",
-                "shared_lib_maintainer", "coordinator"}
+    expected = {
+        "api_maintainer",
+        "infra_maintainer",
+        "frontend_maintainer",
+        "shared_lib_maintainer",
+        "coordinator",
+    }
     assert set(TEMPLATE_REGISTRY.keys()) == expected
 
 

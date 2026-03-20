@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from pydantic import ValidationError
@@ -15,7 +15,7 @@ from tractable.types.git import (
     PullRequestHandle,
 )
 
-NOW = datetime(2026, 3, 17, 12, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 3, 17, 12, 0, 0, tzinfo=UTC)
 
 
 # ── PullRequestHandle ──────────────────────────────────────────────────
@@ -56,7 +56,14 @@ def test_pull_request_handle_model_dump() -> None:
         base_branch="main",
     )
     data = pr.model_dump()
-    assert set(data.keys()) == {"provider", "repo_id", "pr_number", "url", "head_branch", "base_branch"}
+    assert set(data.keys()) == {
+        "provider",
+        "repo_id",
+        "pr_number",
+        "url",
+        "head_branch",
+        "base_branch",
+    }
 
 
 # ── MergeResult ────────────────────────────────────────────────────────

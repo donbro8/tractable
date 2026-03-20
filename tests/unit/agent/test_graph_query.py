@@ -14,7 +14,6 @@ TASK-2.4.2 acceptance criteria:
 from __future__ import annotations
 
 import json
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,17 +23,14 @@ from tractable.errors import TransientError
 from tractable.types.enums import ChangeRisk
 from tractable.types.graph import GraphEntity, ImpactReport, Subgraph
 
-
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
 def _make_entity(entity_id: str = "e1") -> GraphEntity:
-    return GraphEntity(
-        id=entity_id, kind="function", name="foo", repo="r", file_path="f.py"
-    )
+    return GraphEntity(id=entity_id, kind="function", name="foo", repo="r", file_path="f.py")
 
 
-def _make_tool(graph: Any) -> GraphQueryTool:
+def _make_tool(graph: MagicMock) -> GraphQueryTool:
     return GraphQueryTool(
         graph=graph,
         agent_id="agent-test",
@@ -195,8 +191,6 @@ async def test_get_neighborhood_depth_within_cap_not_changed() -> None:
     graph = _mock_graph()
     graph.get_neighborhood.return_value = subgraph
 
-    await _make_tool(graph).invoke(
-        {"operation": "get_neighborhood", "entity_id": "e", "depth": 2}
-    )
+    await _make_tool(graph).invoke({"operation": "get_neighborhood", "entity_id": "e", "depth": 2})
 
     graph.get_neighborhood.assert_called_once_with("e", depth=2)

@@ -111,8 +111,7 @@ async def test_ec1_ingest_repository(
     )
     count = rows[0]["cnt"] if rows else 0
     assert int(count) > 0, (
-        f"Expected at least 1 current entity in graph for repo {_TEST_REPO_NAME!r}; "
-        f"got {count}"
+        f"Expected at least 1 current entity in graph for repo {_TEST_REPO_NAME!r}; got {count}"
     )
 
 
@@ -235,9 +234,7 @@ async def test_ec3_temporal_mutations_two_versions(
     assert v1.temporal.valid_until is not None, (
         "v1 (older version) must have valid_until set after update"
     )
-    assert v2.temporal.valid_until is None, (
-        "v2 (current version) must have valid_until = None"
-    )
+    assert v2.temporal.valid_until is None, "v2 (current version) must have valid_until = None"
 
     # Step 4: query_current returns only v2
     current_rows = await graph.query_current(
@@ -294,8 +291,7 @@ async def test_ec4_get_changes_since(
     changeset = await graph.get_changes_since(since=t_before)
 
     assert not changeset.is_empty, (
-        f"Expected non-empty changeset after update of {entity_id!r}; "
-        f"got is_empty=True"
+        f"Expected non-empty changeset after update of {entity_id!r}; got is_empty=True"
     )
 
     # The entity should appear in added OR modified (created then updated)
@@ -381,7 +377,6 @@ async def test_agent_state_store_roundtrip(state_store: object) -> None:
     assert loaded.pinned_instructions == ["never break the API contract"]
 
 
-
 # ── Additional quality gate: tractable CLI register via subprocess ────────────
 
 
@@ -403,9 +398,7 @@ async def test_cli_register_command(
     if not db_url:
         pytest.skip("DATABASE_URL not set — skipping CLI register test")
 
-    config_path = (
-        Path(__file__).parent.parent.parent / "examples" / "register_python_api.py"
-    )
+    config_path = Path(__file__).parent.parent.parent / "examples" / "register_python_api.py"
     assert config_path.exists(), f"Example config not found: {config_path}"
 
     result = subprocess.run(

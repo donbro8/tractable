@@ -18,7 +18,6 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 import respx
-
 import structlog.testing
 
 from tractable.errors import FatalError, GovernanceError, RecoverableError, TransientError
@@ -190,11 +189,11 @@ async def test_clone_shell_metacharacters_raise_governance_error(
     tmp_path: pathlib.Path,
 ) -> None:
     """AC-2: URL with shell metacharacters raises GovernanceError before subprocess."""
-    with patch("subprocess.run") as mock_run:
-        with pytest.raises(GovernanceError, match="invalid characters"):
-            await provider.clone(
-                "https://github.com/org/repo.git; rm -rf /", str(tmp_path)
-            )
+    with (
+        patch("subprocess.run") as mock_run,
+        pytest.raises(GovernanceError, match="invalid characters"),
+    ):
+        await provider.clone("https://github.com/org/repo.git; rm -rf /", str(tmp_path))
     mock_run.assert_not_called()
 
 
@@ -204,9 +203,11 @@ async def test_clone_http_scheme_raises_governance_error(
     tmp_path: pathlib.Path,
 ) -> None:
     """AC-3: HTTP (non-HTTPS) URL raises GovernanceError."""
-    with patch("subprocess.run") as mock_run:
-        with pytest.raises(GovernanceError, match="scheme must be 'https'"):
-            await provider.clone("http://github.com/org/repo.git", str(tmp_path))
+    with (
+        patch("subprocess.run") as mock_run,
+        pytest.raises(GovernanceError, match="scheme must be 'https'"),
+    ):
+        await provider.clone("http://github.com/org/repo.git", str(tmp_path))
     mock_run.assert_not_called()
 
 
@@ -218,11 +219,11 @@ async def test_clone_disallowed_host_raises_governance_error(
 ) -> None:
     """AC-4: Host not in allowlist raises GovernanceError."""
     monkeypatch.delenv("TRACTABLE_ALLOWED_GIT_HOSTS", raising=False)
-    with patch("subprocess.run") as mock_run:
-        with pytest.raises(GovernanceError, match="not in the allowed list"):
-            await provider.clone(
-                "https://evil.example.com/org/repo.git", str(tmp_path)
-            )
+    with (
+        patch("subprocess.run") as mock_run,
+        pytest.raises(GovernanceError, match="not in the allowed list"),
+    ):
+        await provider.clone("https://evil.example.com/org/repo.git", str(tmp_path))
     mock_run.assert_not_called()
 
 
@@ -485,8 +486,7 @@ async def test_create_branch_already_exists(provider: GitHubProvider) -> None:
 async def test_create_pull_request_success(provider: GitHubProvider) -> None:
     respx.post("https://api.github.com/repos/owner/repo/pulls").mock(
         return_value=httpx.Response(
-            201,
-            json={"number": 42, "html_url": "https://github.com/owner/repo/pull/42"}
+            201, json={"number": 42, "html_url": "https://github.com/owner/repo/pull/42"}
         )
     )
     respx.post("https://api.github.com/repos/owner/repo/pulls/42/requested_reviewers").mock(
@@ -546,7 +546,7 @@ async def test_merge_pull_request_blocked(provider: GitHubProvider) -> None:
     respx.get("https://api.github.com/repos/owner/repo/pulls/42").mock(
         return_value=httpx.Response(200, json={"mergeable_state": "blocked"})
     )
-    
+
     with pytest.raises(GovernanceError, match="blocked by unmet review"):
         await provider.merge_pull_request("owner/repo", pr)
 
@@ -635,7 +635,9 @@ async def test_create_branch_logs_info(provider: GitHubProvider) -> None:
     with structlog.testing.capture_logs() as cap_logs:
         await provider.create_branch("owner/repo", "feature/x", from_ref="main")
 
-    info_logs = [e for e in cap_logs if e.get("log_level") == "info" and e.get("event") == "branch_created"]
+    info_logs = [
+        e for e in cap_logs if e.get("log_level") == "info" and e.get("event") == "branch_created"
+    ]
     assert info_logs, f"Expected branch_created info log; got {cap_logs}"
     entry = info_logs[0]
     assert entry["repo"] == "owner/repo"
@@ -659,7 +661,8 @@ async def test_create_pull_request_logs_info(provider: GitHubProvider) -> None:
         )
 
     info_logs = [
-        e for e in cap_logs
+        e
+        for e in cap_logs
         if e.get("log_level") == "info" and e.get("event") == "pull_request_created"
     ]
     assert info_logs, f"Expected pull_request_created info log; got {cap_logs}"
@@ -695,7 +698,8 @@ async def test_merge_pull_request_logs_info(provider: GitHubProvider) -> None:
         await provider.merge_pull_request("owner/repo", pr, strategy="squash")
 
     info_logs = [
-        e for e in cap_logs
+        e
+        for e in cap_logs
         if e.get("log_level") == "info" and e.get("event") == "pull_request_merged"
     ]
     assert info_logs, f"Expected pull_request_merged info log; got {cap_logs}"
