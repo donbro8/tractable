@@ -94,6 +94,14 @@ class PostgreSQLAgentStateStore:
                 raise RecoverableError(f"Agent context not found: {agent_id!r}")
             return _orm_to_context(row)
 
+    async def list_agents(self) -> Sequence[AgentContext]:
+        """Return all agent contexts ordered by agent_id."""
+        async with _catch_db_errors(), self._session_factory() as session:
+            result = await session.execute(
+                select(AgentContextORM).order_by(AgentContextORM.agent_id)
+            )
+            return [_orm_to_context(row) for row in result.scalars()]
+
     async def save_agent_context(
         self,
         agent_id: str,
@@ -102,6 +110,7 @@ class PostgreSQLAgentStateStore:
         """Upsert agent context (INSERT … ON CONFLICT UPDATE)."""
         values: dict[str, Any] = {
             "agent_id": agent_id,
+            "repo": context.repo,
             "base_template": context.base_template,
             "system_prompt": context.system_prompt,
             "repo_architectural_summary": context.repo_architectural_summary,
@@ -221,6 +230,7 @@ class PostgreSQLAgentStateStore:
 def _orm_to_context(row: AgentContextORM) -> AgentContext:
     return AgentContext(
         agent_id=row.agent_id,
+        repo=row.repo,
         base_template=row.base_template,
         system_prompt=row.system_prompt,
         repo_architectural_summary=row.repo_architectural_summary,

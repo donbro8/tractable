@@ -27,6 +27,7 @@ class AgentContextORM(Base):
     __tablename__ = "agent_contexts"
 
     agent_id: Mapped[str] = mapped_column(String, primary_key=True)
+    repo: Mapped[str] = mapped_column(Text, nullable=False, server_default="", default="")
     base_template: Mapped[str] = mapped_column(Text, nullable=False, default="")
     system_prompt: Mapped[str] = mapped_column(Text, nullable=False, default="")
     repo_architectural_summary: Mapped[str] = mapped_column(

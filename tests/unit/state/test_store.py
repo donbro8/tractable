@@ -63,6 +63,7 @@ def make_audit_entry(agent_id: str = "agent-1") -> AuditEntry:
 def make_context_orm(agent_id: str = "agent-1") -> AgentContextORM:
     row = AgentContextORM()
     row.agent_id = agent_id
+    row.repo = "my-api"
     row.base_template = "api_maintainer"
     row.system_prompt = "You are a coding agent."
     row.repo_architectural_summary = "REST API backed by PostgreSQL."

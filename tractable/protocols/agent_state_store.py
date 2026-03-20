@@ -24,6 +24,10 @@ class AgentStateStore(Protocol):
         """Load the full context document for an agent."""
         ...
 
+    async def list_agents(self) -> Sequence[AgentContext]:
+        """List all registered agents."""
+        ...
+
     async def save_agent_context(
         self,
         agent_id: str,
