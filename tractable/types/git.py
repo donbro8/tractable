@@ -57,3 +57,15 @@ class BranchProtectionRules(BaseModel):
     required_approvals: int = 1
     require_status_checks: list[str] = Field(default_factory=list)
     restrict_push: bool = True
+
+
+class CheckRunInfo(BaseModel):
+    """A single CI check run from the git provider.
+
+    Source: tech-spec.py §2.1 — GitProvider Protocol (CI check run value type).
+    """
+
+    name: str
+    status: str  # "queued" | "in_progress" | "completed"
+    conclusion: str | None = None  # "success" | "failure" | "skipped" | "cancelled" | ...
+    log_url: str | None = None  # URL to fetch log text; None when not yet available

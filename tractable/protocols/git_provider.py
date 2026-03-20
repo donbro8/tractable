@@ -11,6 +11,7 @@ from typing import Literal, Protocol, runtime_checkable
 
 from tractable.types.git import (
     BranchProtectionRules,
+    CheckRunInfo,
     CommitEntry,
     FileEntry,
     MergeResult,
@@ -110,4 +111,20 @@ class GitProvider(Protocol):
         rules: BranchProtectionRules,
     ) -> None:
         """Configure branch protection rules."""
+        ...
+
+    async def get_check_runs(
+        self,
+        repo_id: str,
+        pr_number: int,
+    ) -> Sequence[CheckRunInfo]:
+        """List CI check runs for the PR's head commit."""
+        ...
+
+    async def get_check_run_log(self, log_url: str) -> str:
+        """Fetch log text for a check run.  Returns empty string when unavailable."""
+        ...
+
+    async def rerun_failed_checks(self, repo_id: str, pr_number: int) -> None:
+        """Re-trigger all failed check runs on the PR."""
         ...

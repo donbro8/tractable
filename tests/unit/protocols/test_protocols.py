@@ -36,6 +36,7 @@ from tractable.types.agent import AgentCheckpoint, AgentContext, AuditEntry
 from tractable.types.enums import ChangeSource, TaskPhase
 from tractable.types.git import (
     BranchProtectionRules,
+    CheckRunInfo,
     CommitEntry,
     FileEntry,
     MergeResult,
@@ -103,6 +104,9 @@ class _GitProviderStub:
                                  limit: int = 50) -> Sequence[CommitEntry]: ...
     async def set_branch_protection(self, repo_id: str, branch: str,
                                     rules: BranchProtectionRules) -> None: ...
+    async def get_check_runs(self, repo_id: str, pr_number: int) -> Sequence[CheckRunInfo]: ...
+    async def get_check_run_log(self, log_url: str) -> str: ...
+    async def rerun_failed_checks(self, repo_id: str, pr_number: int) -> None: ...
 
 
 def test_git_provider_isinstance() -> None:

@@ -33,6 +33,7 @@ from tractable.errors import FatalError, GovernanceError, RecoverableError, Tran
 from tractable.types.config import GitProviderConfig
 from tractable.types.git import (
     BranchProtectionRules,
+    CheckRunInfo,
     CommitEntry,
     FileEntry,
     MergeResult,
@@ -537,3 +538,107 @@ class GitHubProvider:
         rules: BranchProtectionRules,
     ) -> None:
         raise RecoverableError("set_branch_protection not yet implemented (Phase 2)")
+
+    # ── CI check run operations ───────────────────────────────────────────
+
+    async def get_check_runs(
+        self,
+        repo_id: str,
+        pr_number: int,
+    ) -> Sequence[CheckRunInfo]:
+        """List CI check runs for the PR's head commit.
+
+        Fetches the PR to resolve its head SHA, then queries the
+        check-runs endpoint for that commit.
+        """
+        async with self._make_client() as client:
+            pr_resp = await client.get(f"/repos/{repo_id}/pulls/{pr_number}")
+            self._handle_response_errors(pr_resp, f"fetch PR {pr_number} in {repo_id}")
+            pr_data: dict[str, Any] = pr_resp.json()
+            head_sha: str = str(pr_data.get("head", {}).get("sha", ""))
+            if not head_sha:
+                raise RecoverableError(
+                    f"Could not resolve head SHA for PR {pr_number} in {repo_id}"
+                )
+
+            runs_resp = await client.get(
+                f"/repos/{repo_id}/commits/{head_sha}/check-runs",
+                params={"per_page": "100"},
+            )
+            self._handle_response_errors(runs_resp, f"check-runs for {head_sha} in {repo_id}")
+            runs_data: Any = runs_resp.json()
+            raw_runs: list[Any] = cast(list[Any], runs_data.get("check_runs", []))
+
+        result: list[CheckRunInfo] = []
+        for run in raw_runs:
+            run_dict = cast(dict[str, Any], run) if isinstance(run, dict) else {}
+            result.append(
+                CheckRunInfo(
+                    name=str(run_dict.get("name", "")),
+                    status=str(run_dict.get("status", "")),
+                    conclusion=run_dict.get("conclusion"),
+                    log_url=run_dict.get("details_url"),
+                )
+            )
+        return result
+
+    async def get_check_run_log(self, log_url: str) -> str:
+        """Fetch log text from *log_url*.
+
+        Makes an authenticated GET to *log_url*.  Returns the response body as
+        a plain string; returns an empty string on HTTP errors so the caller can
+        still report the failure without halting.
+        """
+        async with httpx.AsyncClient(headers=self._headers) as client:
+            try:
+                response = await client.get(log_url, follow_redirects=True)
+                if response.status_code == 200:
+                    return response.text
+            except httpx.HTTPError:
+                pass
+        return ""
+
+    async def rerun_failed_checks(self, repo_id: str, pr_number: int) -> None:
+        """Re-trigger all failed check runs on the PR.
+
+        Fetches the PR head SHA, then re-requests each check run whose
+        ``conclusion`` is ``"failure"`` via the GitHub Checks API.
+        """
+        async with self._make_client() as client:
+            pr_resp = await client.get(f"/repos/{repo_id}/pulls/{pr_number}")
+            self._handle_response_errors(
+                pr_resp, f"fetch PR {pr_number} for rerun in {repo_id}"
+            )
+            pr_data: dict[str, Any] = pr_resp.json()
+            head_sha: str = str(pr_data.get("head", {}).get("sha", ""))
+            if not head_sha:
+                raise RecoverableError(
+                    f"Could not resolve head SHA for PR {pr_number} in {repo_id}"
+                )
+
+            runs_resp = await client.get(
+                f"/repos/{repo_id}/commits/{head_sha}/check-runs",
+                params={"per_page": "100"},
+            )
+            self._handle_response_errors(runs_resp, f"check-runs for rerun in {repo_id}")
+            runs_data: Any = runs_resp.json()
+            raw_runs: list[Any] = cast(list[Any], runs_data.get("check_runs", []))
+
+            rerun_count = 0
+            for raw_run in raw_runs:
+                rdict = cast(dict[str, Any], raw_run) if isinstance(raw_run, dict) else {}
+                if rdict.get("conclusion") != "failure":
+                    continue
+                run_id: int = int(rdict.get("id", 0))
+                rerun_resp = await client.post(
+                    f"/repos/{repo_id}/check-runs/{run_id}/rerequest"
+                )
+                self._handle_response_errors(rerun_resp, f"rerun check {run_id} in {repo_id}")
+                rerun_count += 1
+
+        logger.info(
+            "ci_checks_rerun",
+            repo=repo_id,
+            pr_number=pr_number,
+            count=rerun_count,
+        )
