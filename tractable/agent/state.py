@@ -28,3 +28,4 @@ class AgentWorkflowState(TypedDict):
     error: str | None
     token_count: int
     messages: list[dict[str, Any]]
+    resume_from: str | None  # Set by resume_task() when restoring from checkpoint

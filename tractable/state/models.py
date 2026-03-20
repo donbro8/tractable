@@ -65,6 +65,7 @@ class AgentCheckpointORM(Base):
     conversation_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
     token_usage: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    workflow_state: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
 
 
 class AuditEntryORM(Base):

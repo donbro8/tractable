@@ -160,6 +160,7 @@ class PostgreSQLAgentStateStore:
             conversation_summary=checkpoint.conversation_summary,
             token_usage=checkpoint.token_usage,
             created_at=checkpoint.created_at,
+            workflow_state=checkpoint.workflow_state,
         )
         async with _catch_db_errors(), self._session_factory() as session, session.begin():
             session.add(row)
@@ -240,6 +241,7 @@ def _orm_to_checkpoint(row: AgentCheckpointORM) -> AgentCheckpoint:
         conversation_summary=row.conversation_summary,
         token_usage=row.token_usage,
         created_at=row.created_at,
+        workflow_state=row.workflow_state if row.workflow_state else "{}",
     )
 
 

@@ -36,7 +36,13 @@ class AgentContext(BaseModel):
 
 
 class AgentCheckpoint(BaseModel):
-    """Serialisable snapshot of an agent's mid-task state."""
+    """Serialisable snapshot of an agent's mid-task state.
+
+    ``workflow_state`` holds the full ``AgentWorkflowState`` dict serialised as
+    a JSON string.  This is the data ``resume_task()`` uses to reconstruct the
+    LangGraph initial state on restart.  Defaults to ``"{}"`` (empty JSON
+    object) for checkpoints that pre-date TASK-2.5.1.
+    """
 
     task_id: str
     phase: TaskPhase
@@ -46,6 +52,7 @@ class AgentCheckpoint(BaseModel):
     conversation_summary: str
     token_usage: int
     created_at: datetime
+    workflow_state: str = "{}"
 
 
 class AuditEntry(BaseModel):
