@@ -44,6 +44,7 @@ def _make_initial_state(
     agent_id: str = "agent-test",
     task_id: str = "task-test",
     task_description: str = "Fix the bug",
+    current_model: str = "claude-sonnet-4-6",
 ) -> AgentWorkflowState:
     return AgentWorkflowState(
         agent_id=agent_id,
@@ -56,7 +57,9 @@ def _make_initial_state(
         pr_url=None,
         error=None,
         token_count=0,
+        current_model=current_model,
         messages=[],
+        resume_from=None,
     )
 
 
@@ -379,15 +382,20 @@ def test_no_hardcoded_api_key_in_workflow() -> None:
     assert "ANTHROPIC_API_KEY =" not in source
 
 
-def test_no_hardcoded_model_name_in_workflow() -> None:
-    """AC-7 (extended): No hardcoded model names in workflow module."""
+def test_no_hardcoded_model_name_in_node_logic() -> None:
+    """AC-7 (extended): No hardcoded model names in node logic modules.
+
+    Model names live in workflow.py as configurable defaults (TASK-2.5.2);
+    they must NOT be hardcoded in individual node logic files.
+    """
     import inspect
 
-    from tractable.agent import workflow
+    from tractable.agent.nodes import coordinate, execute, plan, review
 
-    source = inspect.getsource(workflow)
-    assert "claude-sonnet" not in source
-    assert "claude-opus" not in source
+    for mod in (plan, execute, review, coordinate):
+        src = inspect.getsource(mod)
+        assert "claude-sonnet" not in src, f"claude-sonnet hardcoded in {mod.__name__}"
+        assert "claude-opus" not in src, f"claude-opus hardcoded in {mod.__name__}"
 
 
 # ---------------------------------------------------------------------------
@@ -406,3 +414,4 @@ def test_agent_workflow_state_fields() -> None:
     assert state["pr_url"] is None
     assert state["error"] is None
     assert state["token_count"] == 0
+    assert state["current_model"] == "claude-sonnet-4-6"

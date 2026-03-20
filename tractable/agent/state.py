@@ -1,6 +1,7 @@
 """AgentWorkflowState — TypedDict schema for the LangGraph agent workflow.
 
 TASK-2.3.1: State is passed between all four nodes and updated by each.
+TASK-2.5.2: Added ``current_model`` field for token-budget-driven model escalation.
 """
 
 from __future__ import annotations
@@ -27,5 +28,6 @@ class AgentWorkflowState(TypedDict):
     pr_url: str | None
     error: str | None
     token_count: int
+    current_model: str  # Active LLM model; updated on escalation (TASK-2.5.2)
     messages: list[dict[str, Any]]
     resume_from: str | None  # Set by resume_task() when restoring from checkpoint

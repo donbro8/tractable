@@ -149,7 +149,9 @@ async def test_workflow_saves_all_four_checkpoints_to_postgres() -> None:
         pr_url=None,
         error=None,
         token_count=0,
+        current_model="claude-sonnet-4-6",
         messages=[],
+        resume_from=None,
     )
 
     # LangGraph requires a thread_id in the config for MemorySaver.

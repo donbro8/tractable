@@ -11,6 +11,16 @@ from ``AgentCheckpoint.workflow_state`` (JSON) and the workflow graph is
 entered at the node corresponding to the saved phase, skipping all earlier
 nodes.
 
+TASK-2.5.2 — Add token budget tracking and Sonnet → Opus escalation.
+``build_workflow()`` now accepts ``governance``, ``default_model``,
+``escalation_model``, and ``llm_call`` parameters.  A budget-checking wrapper
+is applied to every node: at the start of each node the wrapper compares
+``state["token_count"]`` against ``GovernancePolicy.token_budget_per_task``
+and either escalates the model or raises ``FatalError``.  ``llm_call`` is an
+injectable callback ``(model: str) -> int`` that returns simulated/real token
+usage after each node's LLM interaction, making the behaviour testable without
+live API calls.
+
 Open Question 1 Resolution
 --------------------------
 ``langgraph==1.1.2`` ships only ``MemorySaver`` in its core package
@@ -27,6 +37,7 @@ Milestone 2.5 without changing node logic.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 import structlog
@@ -44,12 +55,18 @@ from tractable.agent.nodes.review import (
     make_reviewing_node,
 )
 from tractable.agent.state import AgentWorkflowState
+from tractable.errors import FatalError
 from tractable.protocols.agent_state_store import AgentStateStore
 from tractable.protocols.code_graph import CodeGraph
 from tractable.protocols.tool import Tool
+from tractable.types.config import GovernancePolicy
 from tractable.types.enums import TaskPhase
 
 _log = structlog.get_logger()
+
+# Default model names — used in build_workflow() and resume_task() defaults.
+_DEFAULT_MODEL = "claude-sonnet-4-6"
+_ESCALATION_MODEL = "claude-opus-4-6"
 
 # ── Node name constants ────────────────────────────────────────────────────
 
@@ -83,6 +100,124 @@ def choose_entry_node(state: AgentWorkflowState) -> str:
     return _NODE_PLANNING
 
 
+# ── Token budget helpers ───────────────────────────────────────────────────
+
+
+def check_token_budget(
+    state: AgentWorkflowState,
+    governance: GovernancePolicy,
+    escalation_model: str,
+) -> dict[str, Any]:
+    """Check token budget at node entry; return model-update dict or raise.
+
+    Returns
+    -------
+    dict
+        ``{"current_model": escalation_model}`` when the model is escalated
+        from Sonnet to Opus.  Empty dict when the budget has not been exceeded.
+
+    Raises
+    ------
+    FatalError
+        When the budget is exceeded and the current model is already Opus
+        (or any non-Sonnet model).
+    """
+    token_count: int = state["token_count"]
+    budget: int = governance.token_budget_per_task
+    current_model: str = state["current_model"]
+
+    if token_count <= budget:
+        return {}
+
+    agent_id: str = state["agent_id"]
+    task_id: str = state["task_id"]
+
+    _log.warning(
+        "token_budget_exceeded",
+        agent_id=agent_id,
+        task_id=task_id,
+        tokens_used=token_count,
+        budget=budget,
+    )
+
+    if "sonnet" in current_model.lower():
+        _log.info(
+            "model_escalated",
+            agent_id=agent_id,
+            task_id=task_id,
+            **{"from": current_model, "to": escalation_model},
+        )
+        return {"current_model": escalation_model}
+
+    raise FatalError(
+        "Token budget exhausted on Opus model; task failed. Checkpoint preserved."
+    )
+
+
+def _wrap_with_budget_check(
+    node_fn: Callable[[AgentWorkflowState], Coroutine[Any, Any, dict[str, Any]]],
+    governance: GovernancePolicy,
+    escalation_model: str,
+    llm_call: Callable[[str], int] | None,
+) -> Callable[[AgentWorkflowState], Coroutine[Any, Any, dict[str, Any]]]:
+    """Wrap a node with token-budget checking and optional LLM token tracking.
+
+    The wrapper:
+    1. Calls ``check_token_budget`` at the start of the node — potentially
+       escalating the model or raising ``FatalError``.
+    2. Runs the underlying node with the (possibly updated) state.
+    3. If ``llm_call`` is provided, invokes it with the active model name to
+       obtain simulated/real token usage and updates ``token_count`` in the
+       returned state dict.
+
+    Parameters
+    ----------
+    node_fn:
+        The original async node function to wrap.
+    governance:
+        Governance policy providing ``token_budget_per_task``.
+    escalation_model:
+        Model name to switch to when the Sonnet budget is exceeded.
+    llm_call:
+        Optional callback ``(model_name: str) -> tokens_used: int`` invoked
+        once per node after the node's logic runs.  Used in tests to simulate
+        LLM token usage without live API calls.
+    """
+
+    async def wrapper(state: AgentWorkflowState) -> dict[str, Any]:
+        # Step 1: Budget check — may escalate model or raise FatalError.
+        budget_updates: dict[str, Any] = check_token_budget(
+            state, governance, escalation_model
+        )
+
+        # Build effective state with updated model if escalation happened.
+        effective_state: AgentWorkflowState = (
+            {**state, **budget_updates}  # type: ignore[misc]
+            if budget_updates
+            else state
+        )
+
+        # Step 2: Run the node.
+        result: dict[str, Any] = await node_fn(effective_state)
+
+        # Step 3: Simulate/record LLM token usage for this node.
+        if llm_call is not None:
+            active_model: str = effective_state["current_model"]
+            tokens_used: int = llm_call(active_model)
+            result = {
+                **result,
+                "token_count": effective_state["token_count"] + tokens_used,
+            }
+
+        # Merge model escalation into the result so LangGraph persists it.
+        if budget_updates:
+            result = {**budget_updates, **result}
+
+        return result
+
+    return wrapper
+
+
 # ── Public API ─────────────────────────────────────────────────────────────
 
 
@@ -90,6 +225,11 @@ def build_workflow(
     tools: dict[str, Tool],
     state_store: AgentStateStore,
     graph: CodeGraph,
+    *,
+    governance: GovernancePolicy | None = None,
+    default_model: str = _DEFAULT_MODEL,
+    escalation_model: str = _ESCALATION_MODEL,
+    llm_call: Callable[[str], int] | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> CompiledStateGraph:
     """Construct and compile the four-node LangGraph agent workflow.
@@ -103,6 +243,19 @@ def build_workflow(
         AgentStateStore implementation used to save checkpoints at each node.
     graph:
         CodeGraph queried by the PLANNING node for repository context.
+    governance:
+        Governance policy.  When supplied, each node is wrapped with a
+        token-budget check that may escalate the model or raise ``FatalError``.
+        When ``None``, no budget enforcement is applied.
+    default_model:
+        LLM model name used for fresh workflow runs.  Stored in
+        ``AgentWorkflowState.current_model``.
+    escalation_model:
+        LLM model name to escalate to when the Sonnet token budget is exceeded.
+    llm_call:
+        Optional callback ``(model_name: str) -> tokens_used: int``.  Called
+        once per node after the node's logic to simulate or record LLM token
+        usage.  Primarily for testing without live API calls.
     checkpointer:
         Optional LangGraph checkpoint saver.  Defaults to ``MemorySaver``.
         Provide a ``SqliteSaver`` or ``PostgresSaver`` (Milestone 2.5) for
@@ -115,10 +268,30 @@ def build_workflow(
     """
     builder: StateGraph = StateGraph(AgentWorkflowState)
 
-    builder.add_node(_NODE_PLANNING, make_planning_node(tools, state_store, graph))
-    builder.add_node(_NODE_EXECUTING, make_executing_node(tools, state_store))
-    builder.add_node(_NODE_REVIEWING, make_reviewing_node(tools, state_store))
-    builder.add_node(_NODE_COORDINATING, make_coordinating_node(tools, state_store))
+    planning_node = make_planning_node(tools, state_store, graph)
+    executing_node = make_executing_node(tools, state_store)
+    reviewing_node = make_reviewing_node(tools, state_store)
+    coordinating_node = make_coordinating_node(tools, state_store)
+
+    # Wrap nodes with budget checking when governance is provided.
+    if governance is not None:
+        planning_node = _wrap_with_budget_check(
+            planning_node, governance, escalation_model, llm_call
+        )
+        executing_node = _wrap_with_budget_check(
+            executing_node, governance, escalation_model, llm_call
+        )
+        reviewing_node = _wrap_with_budget_check(
+            reviewing_node, governance, escalation_model, llm_call
+        )
+        coordinating_node = _wrap_with_budget_check(
+            coordinating_node, governance, escalation_model, llm_call
+        )
+
+    builder.add_node(_NODE_PLANNING, planning_node)
+    builder.add_node(_NODE_EXECUTING, executing_node)
+    builder.add_node(_NODE_REVIEWING, reviewing_node)
+    builder.add_node(_NODE_COORDINATING, coordinating_node)
 
     # Entry point: conditional from START based on resume_from field.
     # Fresh runs → PLANNING; restored runs → the appropriate phase node.
@@ -163,6 +336,10 @@ async def resume_task(
     tools: dict[str, Tool],
     graph: CodeGraph,
     *,
+    governance: GovernancePolicy | None = None,
+    default_model: str = _DEFAULT_MODEL,
+    escalation_model: str = _ESCALATION_MODEL,
+    llm_call: Callable[[str], int] | None = None,
     config: dict[str, Any] | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
 ) -> dict[str, Any]:
@@ -193,6 +370,15 @@ async def resume_task(
         Tool mapping injected into the workflow.
     graph:
         CodeGraph injected into the PLANNING node.
+    governance:
+        Governance policy forwarded to ``build_workflow()``.
+    default_model:
+        Default LLM model for fresh starts; also used when restoring a
+        checkpoint that predates the ``current_model`` field.
+    escalation_model:
+        Escalation model forwarded to ``build_workflow()``.
+    llm_call:
+        Optional LLM token-usage callback forwarded to ``build_workflow()``.
     config:
         LangGraph invocation config (e.g. ``{"configurable": {"thread_id": …}}``).
         Defaults to ``{"configurable": {"thread_id": task_id}}``.
@@ -229,6 +415,7 @@ async def resume_task(
             pr_url=stored.get("pr_url"),
             error=stored.get("error"),
             token_count=int(stored.get("token_count", 0)),
+            current_model=str(stored.get("current_model", default_model)),
             messages=list(stored.get("messages", [])),
             resume_from=str(checkpoint.phase),
         )
@@ -253,6 +440,7 @@ async def resume_task(
             pr_url=None,
             error=None,
             token_count=0,
+            current_model=default_model,
             messages=[],
             resume_from=None,
         )
@@ -261,6 +449,10 @@ async def resume_task(
         tools=tools,
         state_store=state_store,
         graph=graph,
+        governance=governance,
+        default_model=default_model,
+        escalation_model=escalation_model,
+        llm_call=llm_call,
         checkpointer=checkpointer,
     )
     result: dict[str, Any] = await wf.ainvoke(initial_state, config=config)

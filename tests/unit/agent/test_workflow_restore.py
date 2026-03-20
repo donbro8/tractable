@@ -56,6 +56,7 @@ def _state_with_resume(resume_from: str | None) -> AgentWorkflowState:
         pr_url=None,
         error=None,
         token_count=0,
+        current_model="claude-sonnet-4-6",
         messages=[],
         resume_from=resume_from,
     )
