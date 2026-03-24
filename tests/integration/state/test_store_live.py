@@ -17,6 +17,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from tractable.errors import RecoverableError
 from tractable.protocols.agent_state_store import AgentStateStore
 from tractable.state.store import PostgreSQLAgentStateStore
 from tractable.types.agent import AgentCheckpoint, AgentContext, AuditEntry
@@ -126,10 +127,10 @@ async def test_append_and_get_audit_entry(store: PostgreSQLAgentStateStore) -> N
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_get_agent_context_missing_raises_key_error(
+async def test_get_agent_context_missing_raises_recoverable_error(
     store: PostgreSQLAgentStateStore,
 ) -> None:
-    with pytest.raises(KeyError):
+    with pytest.raises(RecoverableError):
         await store.get_agent_context(f"nonexistent-{uuid.uuid4()}")
 
 

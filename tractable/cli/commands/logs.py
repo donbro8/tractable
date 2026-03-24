@@ -7,6 +7,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import time
 from collections.abc import Sequence
 from datetime import datetime
@@ -77,7 +78,11 @@ def logs_cmd(
             raise FatalError(f"Could not fetch audit log: {exc}") from exc
 
         for entry in entries:
-            print(entry.model_dump_json())
+            d = _json.loads(entry.model_dump_json())
+            d.setdefault("event", entry.action)
+            d.setdefault("level", "error" if entry.outcome == "failure" else "info")
+            d.setdefault("repo", "")
+            print(_json.dumps(d))
         return
 
     # Follow mode: poll every 2 s for new entries.
@@ -96,7 +101,11 @@ def logs_cmd(
                     raise FatalError(f"Could not fetch audit log: {exc}") from exc
 
                 for entry in entries:
-                    print(entry.model_dump_json())
+                    d = _json.loads(entry.model_dump_json())
+                    d.setdefault("event", entry.action)
+                    d.setdefault("level", "error" if entry.outcome == "failure" else "info")
+                    d.setdefault("repo", "")
+                    print(_json.dumps(d))
 
                 if entries:
                     # get_audit_log returns DESC order; newest is first.

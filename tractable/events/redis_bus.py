@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator, AsyncIterator
 from typing import Any, Protocol
 
 import structlog
+from redis.exceptions import RedisError
 
 from tractable.errors import TransientError
 from tractable.protocols.event_bus import AgentEvent
@@ -84,7 +85,7 @@ class RedisEventBus:
         data: bytes = event.model_dump_json().encode()
         try:
             await self._redis.publish(topic, data)
-        except ConnectionError as exc:
+        except (ConnectionError, RedisError) as exc:
             raise TransientError(
                 f"Redis publish failed on topic {topic!r}: {exc}"
             ) from exc
@@ -108,7 +109,7 @@ class RedisEventBus:
         pubsub = self._redis.pubsub()
         try:
             await pubsub.subscribe(topic)
-        except ConnectionError as exc:
+        except (ConnectionError, RedisError) as exc:
             raise TransientError(
                 f"Redis subscribe failed on topic {topic!r}: {exc}"
             ) from exc
