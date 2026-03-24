@@ -37,7 +37,9 @@ Milestone 2.5 without changing node logic.
 from __future__ import annotations
 
 import json
+import tempfile
 from collections.abc import Callable, Coroutine
+from pathlib import Path
 from typing import Any
 
 import structlog
@@ -54,6 +56,7 @@ from tractable.agent.nodes.review import (
     RETRY_EDGE,
     make_reviewing_node,
 )
+from tractable.agent.snapshot import cleanup_snapshots, create_snapshot, restore_snapshot
 from tractable.agent.state import AgentWorkflowState
 from tractable.errors import FatalError
 from tractable.protocols.agent_state_store import AgentStateStore
@@ -149,9 +152,7 @@ def check_token_budget(
         )
         return {"current_model": escalation_model}
 
-    raise FatalError(
-        "Token budget exhausted on Opus model; task failed. Checkpoint preserved."
-    )
+    raise FatalError("Token budget exhausted on Opus model; task failed. Checkpoint preserved.")
 
 
 def _wrap_with_budget_check(
@@ -186,9 +187,7 @@ def _wrap_with_budget_check(
 
     async def wrapper(state: AgentWorkflowState) -> dict[str, Any]:
         # Step 1: Budget check — may escalate model or raise FatalError.
-        budget_updates: dict[str, Any] = check_token_budget(
-            state, governance, escalation_model
-        )
+        budget_updates: dict[str, Any] = check_token_budget(state, governance, escalation_model)
 
         # Build effective state with updated model if escalation happened.
         effective_state: AgentWorkflowState = (
@@ -218,6 +217,64 @@ def _wrap_with_budget_check(
     return wrapper
 
 
+# ── Snapshot wrapper ───────────────────────────────────────────────────────
+
+
+def _wrap_with_snapshot(
+    node_fn: Callable[[AgentWorkflowState], Coroutine[Any, Any, dict[str, Any]]],
+    working_dir: Path,
+    cleanup: bool = False,
+) -> Callable[[AgentWorkflowState], Coroutine[Any, Any, dict[str, Any]]]:
+    """Wrap a node with working-directory snapshot/cleanup logic.
+
+    When *cleanup* is ``False`` (default): after the node runs successfully, a
+    ``.tar.gz`` snapshot of *working_dir* is created in the per-task snapshot
+    directory (``<tmp>/tractable_snapshots/<task_id>``).  ``snapshot_path``
+    and ``snapshot_hash`` are added to the returned state dict so they flow
+    into the next ``AgentCheckpoint`` via ``workflow_state``.
+
+    When *cleanup* is ``True``: all snapshot archives for the task are deleted
+    from the snapshot directory after the node runs.  ``snapshot_path`` and
+    ``snapshot_hash`` are set to ``None`` in the returned state.
+
+    Parameters
+    ----------
+    node_fn:
+        The (possibly already budget-wrapped) async node function.
+    working_dir:
+        Agent working directory to snapshot or for which to clean up snapshots.
+    cleanup:
+        When ``True``, delete snapshots instead of creating a new one.
+        Intended for the COORDINATING node (last step of a completed task).
+    """
+
+    async def wrapper(state: AgentWorkflowState) -> dict[str, Any]:
+        result: dict[str, Any] = await node_fn(state)
+        task_id_val: str = state["task_id"]
+        agent_id_val: str = state["agent_id"]
+        snapshot_dir = Path(tempfile.gettempdir()) / "tractable_snapshots" / task_id_val
+
+        if cleanup:
+            cleanup_snapshots(snapshot_dir, task_id_val)
+            _log.debug(
+                "snapshot_cleanup_done",
+                agent_id=agent_id_val,
+                task_id=task_id_val,
+            )
+            return {**result, "snapshot_path": None, "snapshot_hash": None}
+
+        archive_path, archive_hash = create_snapshot(working_dir, snapshot_dir)
+        _log.debug(
+            "snapshot_saved",
+            agent_id=agent_id_val,
+            task_id=task_id_val,
+            snapshot=archive_path,
+        )
+        return {**result, "snapshot_path": archive_path, "snapshot_hash": archive_hash}
+
+    return wrapper
+
+
 # ── Public API ─────────────────────────────────────────────────────────────
 
 
@@ -231,6 +288,7 @@ def build_workflow(
     escalation_model: str = _ESCALATION_MODEL,
     llm_call: Callable[[str], int] | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
+    working_dir: Path | None = None,
 ) -> CompiledStateGraph:
     """Construct and compile the four-node LangGraph agent workflow.
 
@@ -288,6 +346,16 @@ def build_workflow(
             coordinating_node, governance, escalation_model, llm_call
         )
 
+    # Wrap nodes with working-directory snapshot when working_dir is provided.
+    # Snapshot wrapper is outermost so snapshot is taken after all other node
+    # logic (including budget checks) has completed successfully.
+    # COORDINATING uses cleanup=True: removes snapshots when task is done.
+    if working_dir is not None:
+        planning_node = _wrap_with_snapshot(planning_node, working_dir)
+        executing_node = _wrap_with_snapshot(executing_node, working_dir)
+        reviewing_node = _wrap_with_snapshot(reviewing_node, working_dir)
+        coordinating_node = _wrap_with_snapshot(coordinating_node, working_dir, cleanup=True)
+
     builder.add_node(_NODE_PLANNING, planning_node)
     builder.add_node(_NODE_EXECUTING, executing_node)
     builder.add_node(_NODE_REVIEWING, reviewing_node)
@@ -342,6 +410,7 @@ async def resume_task(
     llm_call: Callable[[str], int] | None = None,
     config: dict[str, Any] | None = None,
     checkpointer: BaseCheckpointSaver[Any] | None = None,
+    working_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Start or resume a task, restoring from checkpoint if one exists.
 
@@ -384,6 +453,11 @@ async def resume_task(
         Defaults to ``{"configurable": {"thread_id": task_id}}``.
     checkpointer:
         Optional LangGraph checkpoint saver; forwarded to ``build_workflow()``.
+    working_dir:
+        Agent working directory.  When provided and the checkpoint contains a
+        ``snapshot_path``, the working directory is restored from the snapshot
+        before the workflow is invoked.  When ``None``, no restore is
+        attempted (backwards-compatible with Phase 2 checkpoints).
 
     Returns
     -------
@@ -401,6 +475,26 @@ async def resume_task(
             stored: dict[str, Any] = json.loads(checkpoint.workflow_state)
         except (json.JSONDecodeError, ValueError):
             stored = {}
+
+        # Restore working directory from snapshot if available.
+        # snapshot_path/hash are first read from the serialised workflow_state
+        # (set there by _wrap_with_snapshot); then fall back to the model fields
+        # on AgentCheckpoint (TASK-3.1.2).
+        snap_path: str | None = stored.get("snapshot_path") or checkpoint.snapshot_path
+        snap_hash: str | None = stored.get("snapshot_hash") or checkpoint.snapshot_hash
+
+        if working_dir is not None:
+            if snap_path is not None and snap_hash is not None:
+                restore_snapshot(snap_path, snap_hash, working_dir)
+            else:
+                _log.warning(
+                    "snapshot_missing",
+                    level="warning",
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    repo="",
+                    event="snapshot_missing",
+                )
 
         # Build the restored AgentWorkflowState, injecting resume_from so the
         # graph's entry router skips already-completed phases.
@@ -454,6 +548,7 @@ async def resume_task(
         escalation_model=escalation_model,
         llm_call=llm_call,
         checkpointer=checkpointer,
+        working_dir=working_dir,
     )
     result: dict[str, Any] = await wf.ainvoke(initial_state, config=config)
     return result

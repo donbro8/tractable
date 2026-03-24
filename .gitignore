@@ -32,6 +32,9 @@ htmlcov/
 # uv
 uv.lock.bak
 
+# Tractable agent working-directory snapshots
+**/.tractable_snapshots/
+
 # OS
 .DS_Store
 Thumbs.db

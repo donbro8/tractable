@@ -6,7 +6,7 @@ TASK-2.5.2: Added ``current_model`` field for token-budget-driven model escalati
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 from tractable.types.enums import TaskPhase
 
@@ -31,3 +31,5 @@ class AgentWorkflowState(TypedDict):
     current_model: str  # Active LLM model; updated on escalation (TASK-2.5.2)
     messages: list[dict[str, Any]]
     resume_from: str | None  # Set by resume_task() when restoring from checkpoint
+    snapshot_path: NotRequired[str | None]  # TASK-3.1.2: set by snapshot wrapper after each node
+    snapshot_hash: NotRequired[str | None]  # TASK-3.1.2: SHA-256 of the snapshot archive

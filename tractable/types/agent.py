@@ -55,6 +55,8 @@ class AgentCheckpoint(BaseModel):
     token_usage: int
     created_at: datetime
     workflow_state: str = "{}"
+    snapshot_path: str | None = None
+    snapshot_hash: str | None = None
 
 
 class AuditEntry(BaseModel):
