@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 from tractable.agent.context import assemble_context
+from tractable.errors import RecoverableError
 from tractable.types.agent import AgentCheckpoint, AgentContext, AuditEntry
 from tractable.types.config import (
     AgentScope,
@@ -544,13 +545,13 @@ async def test_all_three_layers_present() -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_template_raises_value_error() -> None:
-    """ValueError raised for unrecognised agent_template ID."""
+async def test_unknown_template_raises_recoverable_error() -> None:
+    """RecoverableError raised for unrecognised agent_template ID (TASK-3.1.1)."""
     store = _MockStateStore()
     graph = _MockGraph()
-    reg = _make_registration(agent_template="does_not_exist")
+    reg = _make_registration(agent_template="nonexistent_template_xyz")
 
-    with pytest.raises(ValueError, match="Unknown agent template"):
+    with pytest.raises(RecoverableError, match="Unknown agent template"):
         await assemble_context("agent-1", store, graph, reg)
 
 

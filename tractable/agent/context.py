@@ -42,6 +42,7 @@ from typing import cast
 
 import structlog
 
+from tractable.errors import RecoverableError
 from tractable.protocols.agent_state_store import AgentStateStore
 from tractable.protocols.code_graph import CodeGraph, TemporalCodeGraph
 from tractable.types.config import TEMPLATE_REGISTRY, GovernancePolicy, RepositoryRegistration
@@ -128,7 +129,7 @@ async def assemble_context(
     # ── Layer 1: Base template ────────────────────────────────────────────
     template = TEMPLATE_REGISTRY.get(registration.agent_template)
     if template is None:
-        raise ValueError(
+        raise RecoverableError(
             f"Unknown agent template: {registration.agent_template!r}. "
             f"Available templates: {list(TEMPLATE_REGISTRY)}"
         )
