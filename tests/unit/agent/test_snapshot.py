@@ -18,7 +18,6 @@ import pytest
 from tractable.agent.snapshot import cleanup_snapshots, create_snapshot, restore_snapshot
 from tractable.errors import FatalError
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -210,6 +209,4 @@ def test_snapshot_cleanup_on_completion() -> None:
 
         # No .tar.gz files should remain.
         remaining = list(snapshot_dir.glob("*.tar.gz"))
-        assert remaining == [], (
-            f"Expected no .tar.gz files after cleanup, found: {remaining}"
-        )
+        assert remaining == [], f"Expected no .tar.gz files after cleanup, found: {remaining}"

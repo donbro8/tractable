@@ -338,12 +338,29 @@ uv run pyright             # strict type check
 
 ## Contributing
 
-Standard pull-request workflow. The CI pipeline (coming in Phase 3) will enforce lint, type-check, and unit tests on every PR. Until then, run these locally before opening a PR:
+Standard pull-request workflow. The CI pipeline enforces lint, type-check, unit tests, and integration tests on every PR. Run these locally before opening a PR:
 
 ```bash
 uv run ruff check tractable/ tests/
 uv run pyright tractable/
 uv run pytest tests/unit
+uv run pytest tests/integration  # requires: docker compose -f deploy/docker-compose.yml up
 ```
 
 Versioning follows [Semantic Versioning](https://semver.org/). Breaking changes to `tractable/protocols/` or `tractable/types/` always increment the major version.
+
+### Branch Protection Settings
+
+Configure the following required status checks on the `main` branch (Settings → Branches → Branch protection rules). These require admin permissions and are not set by the CI workflow files automatically:
+
+| Required Status Check | Workflow |
+|---|---|
+| `ci / lint` | `.github/workflows/ci.yml` |
+| `ci / typecheck` | `.github/workflows/ci.yml` |
+| `ci / unit-tests` | `.github/workflows/ci.yml` |
+| `ci / integration-tests` | `.github/workflows/ci.yml` |
+
+Recommended additional settings:
+- **Require a pull request before merging** — at least 1 approving review
+- **Require branches to be up to date before merging**
+- **Do not allow bypassing the above settings**
