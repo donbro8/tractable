@@ -51,7 +51,7 @@ jobs:
       falkordb:
         image: falkordb/falkordb:latest
         ports:
-          - 6379:6379
+          - 6380:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -75,7 +75,7 @@ jobs:
       redis:
         image: redis:7-alpine
         ports:
-          - 6380:6379
+          - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -84,8 +84,9 @@ jobs:
 
     env:
       DATABASE_URL: postgresql+asyncpg://tractable:tractable@localhost:5432/tractable
-      REDIS_URL: redis://localhost:6380
+      REDIS_URL: redis://localhost:6379
       FALKORDB_HOST: localhost
+      FALKORDB_PORT: "6380"
 
     steps:
       - uses: actions/checkout@v4
