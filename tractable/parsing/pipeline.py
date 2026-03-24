@@ -20,6 +20,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from tractable.errors import FatalError
+from tractable.parsing.parsers.hcl_parser import HCLParser
 from tractable.parsing.parsers.python_parser import PythonParser
 from tractable.protocols.code_graph import TemporalCodeGraph
 from tractable.protocols.graph_construction import CodeParser, ParsedEntity, ParsedRelationship
@@ -150,7 +151,7 @@ class GraphConstructionPipeline:
         self,
         extra_parsers: list[CodeParser] | None = None,
     ) -> None:
-        default_parsers: list[CodeParser] = [PythonParser()]
+        default_parsers: list[CodeParser] = [PythonParser(), HCLParser()]
         self._parsers: list[CodeParser] = default_parsers + (extra_parsers or [])
 
     def _parser_for(self, file_path: str) -> CodeParser | None:

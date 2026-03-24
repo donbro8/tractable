@@ -456,6 +456,74 @@ async def test_fatal_error_on_zero_files_parsed(
 
 
 @pytest.mark.asyncio
+async def test_pipeline_ingests_hcl_repo(
+    pipeline: GraphConstructionPipeline,
+) -> None:
+    """AC-3 (TASK-3.2.1): ingest_repository on a .tf fixture produces terraform_resource entities."""
+    from pathlib import Path as _Path
+
+    import tempfile as _tempfile
+
+    import tractable.parsing.pipeline as _pl
+
+    # Use the fixture terraform directory as a stand-in repo
+    fixture_dir = (
+        _Path(__file__).parent.parent.parent / "fixtures" / "terraform"
+    )
+    with _tempfile.TemporaryDirectory() as tmp:
+        # Copy fixture files into tmp so the pipeline can walk them
+        import shutil as _shutil
+
+        _shutil.copytree(str(fixture_dir), tmp, dirs_exist_ok=True)
+
+        registration = _make_registration(tmp, ignore_patterns=[".git/**"])
+        graph = _make_mock_graph()
+
+        captured_mutations: list[TemporalMutation] = []
+
+        from datetime import UTC as _UTC
+        from datetime import datetime as _datetime
+
+        async def _capture(
+            mutations: Sequence[TemporalMutation],
+            change_source: ChangeSource,
+            commit_sha: str | None = None,
+            agent_id: str | None = None,
+        ) -> TemporalMutationResult:
+            captured_mutations.extend(mutations)
+            return TemporalMutationResult(
+                entities_created=len(mutations),
+                entities_updated=0,
+                entities_deleted=0,
+                edges_created=0,
+                edges_deleted=0,
+                timestamp=_datetime.now(_UTC),
+            )
+
+        graph.apply_mutations = _capture  # type: ignore[assignment]
+
+        with patch("tractable.parsing.pipeline.create_git_provider") as mock_factory:
+            mock_provider = MagicMock()
+            mock_provider.clone = _make_clone_mock(tmp)
+            mock_factory.return_value = mock_provider
+
+            result = await pipeline.ingest_repository(registration, graph)
+
+    # At least one terraform_resource entity must have been created
+    resource_entities = [
+        m
+        for m in captured_mutations
+        if m.operation == "create_entity"
+        and m.payload.get("kind") == "terraform_resource"
+    ]
+    assert len(resource_entities) >= 1, (
+        f"Expected at least one terraform_resource entity; "
+        f"got kinds: {[m.payload.get('kind') for m in captured_mutations if m.operation == 'create_entity']}"
+    )
+    assert result.files_parsed >= 1
+
+
+@pytest.mark.asyncio
 async def test_file_parsed_structlog_event(
     pipeline: GraphConstructionPipeline,
     capfd: pytest.CaptureFixture[str],
