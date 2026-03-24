@@ -94,6 +94,8 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --extra dev
+      - name: check-migrations
+        run: uv run alembic check
       - name: apply-migrations
         run: uv run alembic upgrade head
       - name: integration-tests
