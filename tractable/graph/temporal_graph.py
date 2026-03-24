@@ -762,10 +762,10 @@ class FalkorDBTemporalGraph:
         rows = await self._client.execute(
             "MATCH (closed:Entity) "
             "WHERE closed.valid_until IS NOT NULL "
-            "AND NOT EXISTS { "
-            "  MATCH (open:Entity {id: closed.id}) "
-            "  WHERE open.valid_until IS NULL "
-            "} "
+            "OPTIONAL MATCH (open:Entity) "
+            "WHERE open.id = closed.id AND open.valid_until IS NULL "
+            "WITH closed, open "
+            "WHERE open IS NULL "
             "RETURN closed.id AS entity_id",
             {},
         )

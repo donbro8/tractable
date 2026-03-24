@@ -80,7 +80,6 @@ class _WakeOnWebhookPipeline:
                         repo=event.repo_name,
                         level="info",
                         reason="webhook",
-                        event="agent_woke",
                     )
         except Exception:
             _log.warning(

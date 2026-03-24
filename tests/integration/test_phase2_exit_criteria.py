@@ -65,19 +65,21 @@ pytestmark = pytest.mark.integration
 
 
 def _skip_if_postgres_unavailable() -> None:
-    """Skip the test if PostgreSQL is not reachable."""
-    from sqlalchemy.ext.asyncio import create_async_engine
+    """Skip the test if PostgreSQL is not reachable (TCP check)."""
+    import socket
+    import urllib.parse
 
-    engine = create_async_engine(_DATABASE_URL, pool_pre_ping=True)
+    parsed = urllib.parse.urlparse(_DATABASE_URL.replace("+asyncpg", ""))
+    host = parsed.hostname or "localhost"
+    port = parsed.port or 5432
     try:
-        asyncio.get_event_loop().run_until_complete(engine.connect().__aenter__())
-    except Exception:
+        with socket.create_connection((host, port), timeout=3):
+            pass
+    except OSError:
         pytest.skip(
             f"PostgreSQL not reachable at {_DATABASE_URL}. "
             "Start the stack: docker compose -f deploy/docker-compose.yml up -d"
         )
-    finally:
-        asyncio.get_event_loop().run_until_complete(engine.dispose())
 
 
 def _skip_if_tractable_service_unavailable() -> None:
@@ -212,6 +214,7 @@ async def test_checkpoint_resume(state_store: PostgreSQLAgentStateStore) -> None
 
     planning_call_count = 0
 
+    import tractable.agent.workflow as _workflow_module  # noqa: PLC0415
     from tractable.agent.nodes import plan as _plan_module  # noqa: PLC0415
 
     original_make_planning = _plan_module.make_planning_node
@@ -233,7 +236,8 @@ async def test_checkpoint_resume(state_store: PostgreSQLAgentStateStore) -> None
     def _llm_call(model: str) -> int:  # noqa: ARG001
         return 500
 
-    with patch.object(_plan_module, "make_planning_node", _counting_make_planning):
+    # Patch at the consuming module (workflow.py) so the imported name is replaced.
+    with patch.object(_workflow_module, "make_planning_node", _counting_make_planning):
         # First run — PLANNING executes and saves a checkpoint.
         await resume_task(
             agent_id=agent_id,
@@ -256,7 +260,7 @@ async def test_checkpoint_resume(state_store: PostgreSQLAgentStateStore) -> None
     planning_call_count = 0
 
     with (
-        patch.object(_plan_module, "make_planning_node", _counting_make_planning),
+        patch.object(_workflow_module, "make_planning_node", _counting_make_planning),
         structlog.testing.capture_logs() as captured_logs,
     ):
         await resume_task(

@@ -48,6 +48,11 @@ services:
       - "8000:8000"
     env_file:
       - ../.env
+    environment:
+      DATABASE_URL: "postgresql+asyncpg://tractable:tractable_dev@postgres:5432/tractable"
+      REDIS_URL: "redis://redis:6379"
+      FALKORDB_HOST: "falkordb"
+      FALKORDB_PORT: "6379"
     depends_on:
       falkordb:
         condition: service_healthy
@@ -56,7 +61,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\" || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
