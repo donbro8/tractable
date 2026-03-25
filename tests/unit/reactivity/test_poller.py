@@ -11,9 +11,10 @@ Covers all acceptance criteria from TASK-3.2.2:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -41,13 +42,11 @@ def _make_poller(
 ) -> tuple[ChangePoller, MagicMock, AsyncMock, AsyncMock]:
     """Build a ChangePoller with fully mocked dependencies."""
     provider = MagicMock()
-    provider.get_commit_history = AsyncMock(
-        return_value=commits or [_make_commit("abc123")]
-    )
+    provider.get_commit_history = AsyncMock(return_value=commits or [_make_commit("abc123")])
 
     published_events: list[tuple[str, Any]] = []
 
-    async def _publish(topic: str, event: Any) -> None:
+    async def _publish(topic: str, event: object) -> None:
         published_events.append((topic, event))
 
     event_bus = MagicMock()
@@ -133,10 +132,8 @@ async def test_stop_cancels_task_within_one_second() -> None:
     poller.stop("owner/repo")
 
     # Wait up to 1 second for the cancellation to propagate
-    try:
+    with contextlib.suppress(asyncio.CancelledError, TimeoutError):
         await asyncio.wait_for(asyncio.shield(task), timeout=1.0)
-    except (asyncio.CancelledError, asyncio.TimeoutError):
-        pass
 
     assert task.cancelled() or task.done()
     assert "owner/repo" not in poller._tasks

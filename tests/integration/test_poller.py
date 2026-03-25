@@ -10,9 +10,10 @@ waiting 90 real seconds.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -60,7 +61,7 @@ async def test_poller_delivers_change_notification() -> None:
 
     published: list[tuple[str, Any]] = []
 
-    async def _publish(topic: str, event: Any) -> None:
+    async def _publish(topic: str, event: object) -> None:
         published.append((topic, event))
 
     event_bus = MagicMock()
@@ -100,15 +101,11 @@ async def test_poller_delivers_change_notification() -> None:
         poller.start(repo_id)
         # Let the polling loop run until cancelled
         task = poller._tasks[repo_id]
-        try:
+        with contextlib.suppress(asyncio.CancelledError, TimeoutError):
             await asyncio.wait_for(task, timeout=5.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
-            pass
 
     # Assert that at least one RepositoryChangeEvent was published
-    assert len(published) >= 1, (
-        f"Expected at least one change event; got {len(published)}"
-    )
+    assert len(published) >= 1, f"Expected at least one change event; got {len(published)}"
     topic, agent_event = published[0]
     assert topic == f"repo.{repo_id}.change"
     assert agent_event.event_type == "repository_change"
