@@ -321,3 +321,13 @@ class TestProtocolConformance:
     def test_isinstance_check_passes(self) -> None:
         store, _ = make_store()
         assert isinstance(store, AgentStateStore)
+
+
+# ── Audit log append-only enforcement ─────────────────────────────────────────
+
+
+def test_audit_log_has_no_delete_method() -> None:
+    """The audit log must be append-only: no delete or clear methods allowed."""
+    methods = dir(PostgreSQLAgentStateStore)
+    forbidden = [m for m in methods if m.startswith("delete_audit") or m.startswith("clear_audit")]
+    assert forbidden == [], f"Forbidden audit-delete methods found: {forbidden}"

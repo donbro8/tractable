@@ -92,3 +92,18 @@ uv run alembic downgrade -1
 5. Commit the new migration file alongside your model changes.
 
 Never edit an existing migration revision that has already been applied to any environment. Create a new revision instead.
+
+---
+
+## Append-Only Tables
+
+The `audit_log` table is **append-only by design**. The application user must never be granted `DELETE` or `TRUNCATE` on this table.
+
+When provisioning a new environment, a DBA must explicitly verify (or enforce via role policy) that:
+
+```sql
+-- Do NOT run this — shown for illustration only:
+-- REVOKE DELETE, TRUNCATE ON audit_log FROM <app_user>;
+```
+
+The application code enforces this at the API layer (`append_audit_entry()` only; no delete method exists on `PostgreSQLAgentStateStore`). If you ever add a migration that touches `audit_log`, it must be append-only (e.g. adding an index or column). Adding `DELETE` or `TRUNCATE` operations to any migration for this table is prohibited.
