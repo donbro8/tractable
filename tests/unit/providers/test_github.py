@@ -63,29 +63,36 @@ def test_github_provider_satisfies_protocol(
 # ── Constructor credential validation ─────────────────────────────────────────
 
 
-def test_missing_credentials_raises_at_construction(
+@pytest.mark.asyncio
+async def test_missing_credentials_raises_at_first_call(
     monkeypatch: pytest.MonkeyPatch,
     github_config: GitProviderConfig,
+    tmp_path: pathlib.Path,
 ) -> None:
-    """A missing credentials env var must raise at construction, not at first call."""
+    """A missing credentials env var raises FatalError at the first API call."""
     monkeypatch.delenv("TEST_GITHUB_TOKEN", raising=False)
-    with pytest.raises(FatalError, match="TEST_GITHUB_TOKEN"):
-        GitHubProvider(github_config)
+    p = GitHubProvider(github_config)  # construction succeeds — resolution deferred
+    with pytest.raises(FatalError, match="TEST_GITHUB_TOKEN"), patch("subprocess.run"):
+        await p.clone("owner/repo", str(tmp_path))
 
 
 def test_default_constructor_reads_github_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    """GitHubProvider() with no args reads GITHUB_TOKEN from environment."""
+    """GitHubProvider() with no args constructs successfully; token resolved at call time."""
     monkeypatch.setenv("GITHUB_TOKEN", "ghp_default_token_xyz")
     p = GitHubProvider()
     assert isinstance(p, GitProvider)
 
 
-def test_default_constructor_raises_when_github_token_missing(
+@pytest.mark.asyncio
+async def test_default_constructor_raises_when_github_token_missing(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
 ) -> None:
+    """Missing GITHUB_TOKEN raises FatalError at the first credential-needing call."""
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
-    with pytest.raises(FatalError, match="GITHUB_TOKEN"):
-        GitHubProvider()
+    p = GitHubProvider()  # construction succeeds — resolution deferred
+    with pytest.raises(FatalError, match="GITHUB_TOKEN"), patch("subprocess.run"):
+        await p.clone("owner/repo", str(tmp_path))
 
 
 # ── clone ─────────────────────────────────────────────────────────────────────
@@ -163,19 +170,27 @@ async def test_clone_token_not_in_log_output(
 
 
 @pytest.mark.asyncio
-async def test_clone_full_url_injects_token_in_subprocess(
+async def test_clone_full_url_credentials_not_in_subprocess_url(
     provider: GitHubProvider,
     tmp_path: pathlib.Path,
 ) -> None:
-    """AC-1: Full HTTPS URL → subprocess receives x-access-token credential; token not in logs."""
+    """Full HTTPS URL → token NOT in subprocess args; credentials via env; token not in logs."""
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         with structlog.testing.capture_logs() as cap_logs:
             await provider.clone("https://github.com/org/repo.git", str(tmp_path))
 
     call_args: list[str] = mock_run.call_args[0][0]
+    # Token must NOT appear in any subprocess argument (including the URL).
+    for arg in call_args:
+        assert "ghp_testtoken1234567890" not in str(arg)
+    # Clone URL must be plain HTTPS without embedded credentials.
     clone_url = next((a for a in call_args if "github.com" in a), "")
-    assert "x-access-token:ghp_testtoken1234567890@github.com" in clone_url
+    assert "x-access-token:" not in clone_url
+    # Credentials must be passed via env, not URL.
+    call_kwargs = mock_run.call_args[1]
+    env_passed: dict[str, str] = call_kwargs.get("env", {})
+    assert "GIT_CONFIG_VALUE_0" in env_passed
 
     # Token must not appear in any structlog output.
     for entry in cap_logs:
@@ -807,6 +822,56 @@ async def test_clone_transient_error_on_nonzero_exit(
         mock_run.return_value = MagicMock(returncode=128, stderr="fatal: not found")
         with pytest.raises(TransientError, match="git exited 128"):
             await provider.clone("owner/repo", str(tmp_path))
+
+
+# ── Credential hygiene (TASK-3.3.1) ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_token_not_in_log_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """AC-1: Token never appears in any structlog output during clone()."""
+    monkeypatch.setenv("GITHUB_BOT_TOKEN", "ghp_fakefakefake")
+    config = GitProviderConfig(
+        provider_type="github",
+        credentials_secret_ref="GITHUB_BOT_TOKEN",
+    )
+    provider = GitHubProvider(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        with structlog.testing.capture_logs() as cap_logs:
+            await provider.clone("owner/repo", str(tmp_path), branch="main")
+
+    for entry in cap_logs:
+        for v in entry.values():
+            assert "ghp_fakefakefake" not in str(v)
+
+
+@pytest.mark.asyncio
+async def test_token_not_in_subprocess_args(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """AC-2: Token never appears in any subprocess.run argument during clone()."""
+    monkeypatch.setenv("GITHUB_BOT_TOKEN", "ghp_fakefakefake")
+    config = GitProviderConfig(
+        provider_type="github",
+        credentials_secret_ref="GITHUB_BOT_TOKEN",
+    )
+    provider = GitHubProvider(config)
+
+    with patch("subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        await provider.clone("owner/repo", str(tmp_path), branch="main")
+
+    call_args: list[str] = mock_run.call_args[0][0]
+    for arg in call_args:
+        assert "ghp_fakefakefake" not in str(arg), (
+            f"Token found in subprocess arg: {arg!r}"
+        )
 
 
 # ── Integration tests (skipped in unit test runs) ─────────────────────────────

@@ -114,10 +114,10 @@ class GitHubProvider:
     ``NotImplementedError("Implemented in Phase 2")``.
 
     The GitHub token is resolved from the environment variable named by
-    ``config.credentials_secret_ref`` at construction time. If the variable
-    is absent the constructor raises immediately — never at first API call.
-
-    The token value is NEVER written to log output.
+    ``config.credentials_secret_ref`` at the moment the credential is needed
+    (inside ``clone()``, ``create_pull_request()``, etc.), not at construction
+    time.  The resolved token string is never stored in an instance attribute
+    and is never passed to any logging call.
     """
 
     def __init__(self, config: GitProviderConfig | None = None) -> None:
@@ -126,31 +126,41 @@ class GitHubProvider:
                 provider_type="github",
                 credentials_secret_ref="GITHUB_TOKEN",
             )
-        cred_var = config.credentials_secret_ref
-        token = os.environ.get(cred_var)
+        self._credentials_secret_ref = config.credentials_secret_ref
+        self._base_url = (config.base_url or _GITHUB_API_BASE).rstrip("/")
+        self._default_branch = config.default_branch
+
+    # ── Internal helpers ──────────────────────────────────────────────────
+
+    def _get_token(self) -> str:
+        """Resolve the GitHub token from the environment at call time.
+
+        The token value is never stored as an instance attribute.
+        """
+        token = os.environ.get(self._credentials_secret_ref)
         if token is None:
             logger.error(
                 "github.auth_failure",
-                credential_var=cred_var,
+                credential_var=self._credentials_secret_ref,
             )
             raise FatalError(
-                f"GitHub credentials not found: environment variable '{cred_var}' is not set. "
+                f"GitHub credentials not found: environment variable "
+                f"'{self._credentials_secret_ref}' is not set. "
                 "Set this variable to a GitHub personal access token with 'repo' scope."
             )
-        # Store token privately — never reference self._token in any log call.
-        self._token = token
-        self._base_url = (config.base_url or _GITHUB_API_BASE).rstrip("/")
-        self._default_branch = config.default_branch
-        self._headers: dict[str, str] = {
+        return token
+
+    def _make_headers(self) -> dict[str, str]:
+        """Build authorization headers, resolving the token at call time."""
+        token = self._get_token()
+        return {
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-    # ── Internal helpers ──────────────────────────────────────────────────
-
     def _make_client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=self._base_url, headers=self._headers)
+        return httpx.AsyncClient(base_url=self._base_url, headers=self._make_headers())
 
     def _handle_response_errors(self, response: httpx.Response, context: str) -> None:
         """Convert GitHub HTTP error codes to domain errors.
@@ -229,8 +239,26 @@ class GitHubProvider:
         log = logger.bind(repo=repo_path, branch=branch)
         log.info("git.clone.start")
 
-        # Build authenticated URL — never pass this to structlog.
-        clone_url = f"https://x-access-token:{self._token}@github.com/{repo_path}.git"
+        # Resolve token at call time — never store it or log it.
+        token = self._get_token()
+
+        # Plain HTTPS URL — credentials are injected via the subprocess
+        # environment using git's extraheader mechanism, not via the URL.
+        clone_url = f"https://github.com/{repo_path}.git"
+
+        # Build subprocess environment that injects the Authorization header
+        # for github.com via GIT_CONFIG_COUNT.  The token value is only in
+        # the environment mapping and never appears in the argv list passed
+        # to subprocess.run().
+        _credentials_b64 = base64.b64encode(
+            f"x-access-token:{token}".encode()
+        ).decode()
+        _clone_env: dict[str, str] = {
+            **os.environ,
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {_credentials_b64}",
+        }
 
         try:
             if sparse_paths:
@@ -243,6 +271,7 @@ class GitHubProvider:
                     ],
                     capture_output=True,
                     text=True,
+                    env=_clone_env,
                 )
                 if result.returncode != 0:
                     raise TransientError(
@@ -265,6 +294,7 @@ class GitHubProvider:
                     ["git", "clone", "--branch", branch, clone_url, target_path],
                     capture_output=True,
                     text=True,
+                    env=_clone_env,
                 )
                 if result.returncode != 0:
                     raise TransientError(
@@ -589,7 +619,7 @@ class GitHubProvider:
         a plain string; returns an empty string on HTTP errors so the caller can
         still report the failure without halting.
         """
-        async with httpx.AsyncClient(headers=self._headers) as client:
+        async with httpx.AsyncClient(headers=self._make_headers()) as client:
             try:
                 response = await client.get(log_url, follow_redirects=True)
                 if response.status_code == 200:

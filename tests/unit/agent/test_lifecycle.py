@@ -420,3 +420,85 @@ async def test_notify_consumer_relevance_skipped_by_default() -> None:
         await manager.notify_agent("agent-1", notification)
 
     mock_loop.call_later.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Working directory cleanup (TASK-3.3.1)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_working_dir_cleaned_up_on_completion(tmp_path: Path) -> None:
+    """AC-3: shutil.rmtree is called with the working directory on task completion."""
+    from tractable.agent.workflow import resume_task
+    from tractable.errors import FatalError as _FatalError  # noqa: F401
+    from tractable.types.enums import TaskPhase
+
+    working_dir = tmp_path / "agent-work"
+    working_dir.mkdir()
+
+    mock_store = MagicMock()
+    mock_store.get_checkpoint = AsyncMock(return_value=None)
+
+    with patch("tractable.agent.workflow.build_workflow") as mock_build:
+        mock_wf = MagicMock()
+        mock_wf.ainvoke = AsyncMock(return_value={
+            "agent_id": "agent-1",
+            "task_id": "task-1",
+            "phase": str(TaskPhase.COORDINATING),
+            "plan": [],
+            "files_changed": [],
+            "test_results": {},
+            "pr_url": None,
+            "error": None,
+            "token_count": 0,
+            "current_model": "claude-sonnet-4-6",
+            "messages": [],
+        })
+        mock_build.return_value = mock_wf
+
+        with patch("shutil.rmtree") as mock_rmtree:
+            await resume_task(
+                agent_id="agent-1",
+                task_id="task-1",
+                task_description="test task",
+                state_store=mock_store,
+                tools={},
+                graph=MagicMock(),
+                working_dir=working_dir,
+            )
+
+    mock_rmtree.assert_any_call(str(working_dir), ignore_errors=True)
+
+
+@pytest.mark.asyncio
+async def test_working_dir_cleaned_up_on_fatal_error(tmp_path: Path) -> None:
+    """AC-4: shutil.rmtree is called even when the workflow raises FatalError."""
+    from tractable.agent.workflow import resume_task
+    from tractable.errors import FatalError
+
+    working_dir = tmp_path / "agent-work"
+    working_dir.mkdir()
+
+    mock_store = MagicMock()
+    mock_store.get_checkpoint = AsyncMock(return_value=None)
+
+    with patch("tractable.agent.workflow.build_workflow") as mock_build:
+        mock_wf = MagicMock()
+        mock_wf.ainvoke = AsyncMock(
+            side_effect=FatalError("Token budget exhausted on Opus model")
+        )
+        mock_build.return_value = mock_wf
+
+        with patch("shutil.rmtree") as mock_rmtree, pytest.raises(FatalError):
+            await resume_task(
+                agent_id="agent-1",
+                task_id="task-1",
+                task_description="test task",
+                state_store=mock_store,
+                tools={},
+                graph=MagicMock(),
+                working_dir=working_dir,
+            )
+
+    mock_rmtree.assert_any_call(str(working_dir), ignore_errors=True)

@@ -37,6 +37,7 @@ Milestone 2.5 without changing node logic.
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 from collections.abc import Callable, Coroutine
 from pathlib import Path
@@ -550,5 +551,13 @@ async def resume_task(
         checkpointer=checkpointer,
         working_dir=working_dir,
     )
-    result: dict[str, Any] = await wf.ainvoke(initial_state, config=config)
-    return result
+    try:
+        result: dict[str, Any] = await wf.ainvoke(initial_state, config=config)
+        return result
+    finally:
+        # Always clean up the working directory and any snapshot archives,
+        # regardless of whether the workflow completed or raised an exception.
+        if working_dir is not None:
+            shutil.rmtree(str(working_dir), ignore_errors=True)
+            snapshot_dir = Path(tempfile.gettempdir()) / "tractable_snapshots" / task_id
+            shutil.rmtree(str(snapshot_dir), ignore_errors=True)
