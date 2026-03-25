@@ -1,0 +1,63 @@
+# docker-compose.prod.yml — Production overrides for tractable services
+# Usage: docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.prod.yml up
+#
+# This file overrides dev defaults for production deployments. It does NOT contain
+# secrets — inject those via environment variables or a secrets manager.
+
+services:
+  falkordb:
+    # Restart automatically unless explicitly stopped (survives host reboots)
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # FalkorDB is memory-intensive for in-memory graph operations
+          cpus: "1.0"
+          memory: 2G
+    healthcheck:
+      # Tighten start_period from dev value to 10s for production
+      start_period: 10s
+
+  postgres:
+    # Restart automatically unless explicitly stopped
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+    healthcheck:
+      # Tighten start_period to 10s for production
+      start_period: 10s
+
+  redis:
+    # Restart automatically unless explicitly stopped
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          # Redis is lightweight; cap at 256M for the event bus workload
+          cpus: "0.5"
+          memory: 256M
+    healthcheck:
+      # Tighten start_period to 10s for production
+      start_period: 10s
+
+  tractable:
+    # Restart automatically unless explicitly stopped
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    # Production runs from the built image — no source-code bind mounts
+    volumes: []
+    healthcheck:
+      # Reduce from 20s (dev default) to 10s for production
+      start_period: 10s
+
+# Named volumes ensure PostgreSQL and FalkorDB data persist across restarts/upgrades
+volumes:
+  falkordb_data:
+  postgres_data:
