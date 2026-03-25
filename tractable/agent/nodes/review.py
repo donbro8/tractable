@@ -4,6 +4,10 @@ TASK-2.3.1: Saves a checkpoint with phase=REVIEWING, enforces GovernancePolicy
 gates (mocked in this milestone), and routes either back to EXECUTING on
 failure or forward to COORDINATING on success.
 
+TASK-3.2.3: Enforces ``max_lines_per_change`` governance limit after tests
+pass.  Accepts an optional ``_count_lines`` callable for testing without a
+live git repository.
+
 Routing constants
 -----------------
 RETRY_EDGE
@@ -15,6 +19,7 @@ DONE_EDGE
 
 from __future__ import annotations
 
+import subprocess
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
@@ -29,6 +34,7 @@ if TYPE_CHECKING:
     from tractable.agent.state import AgentWorkflowState
     from tractable.protocols.agent_state_store import AgentStateStore
     from tractable.protocols.tool import Tool
+    from tractable.types.config import GovernancePolicy
 
 _log = structlog.get_logger()
 
@@ -36,12 +42,48 @@ _log = structlog.get_logger()
 RETRY_EDGE = "retry"
 DONE_EDGE = "done"
 
+
+def _git_diff_stat_lines(_files_changed: list[str]) -> int:
+    """Return total lines changed via ``git diff --stat``.
+
+    Parses the summary line of ``git diff --stat`` output, e.g.::
+
+        3 files changed, 42 insertions(+), 7 deletions(-)
+
+    Returns insertions + deletions.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--stat"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        output = result.stdout.strip()
+        if not output:
+            return 0
+        summary = output.splitlines()[-1]
+        insertions = 0
+        deletions = 0
+        for part in summary.split(","):
+            part = part.strip()
+            if "insertion" in part:
+                insertions = int(part.split()[0])
+            elif "deletion" in part:
+                deletions = int(part.split()[0])
+        return insertions + deletions
+    except Exception:
+        return 0
+
+
 # ── Public factory ─────────────────────────────────────────────────────────
 
 
 def make_reviewing_node(
     tools: dict[str, Tool],
     state_store: AgentStateStore,
+    governance: GovernancePolicy | None = None,
+    _count_lines: Callable[[list[str]], int] | None = None,
 ) -> Callable[[AgentWorkflowState], Coroutine[Any, Any, dict[str, Any]]]:
     """Return an async REVIEWING node with injected dependencies.
 
@@ -51,7 +93,13 @@ def make_reviewing_node(
         Tool name → Tool mapping; injected at workflow construction time.
     state_store:
         Used to persist the REVIEWING-phase checkpoint.
+    governance:
+        When supplied, ``max_lines_per_change`` is checked after tests pass.
+    _count_lines:
+        Optional override for line counting; defaults to ``_git_diff_stat_lines``.
+        Pass a stub in unit tests to avoid requiring a real git repository.
     """
+    count_lines = _count_lines if _count_lines is not None else _git_diff_stat_lines
 
     async def reviewing_node(state: AgentWorkflowState) -> dict[str, Any]:
         agent_id = state["agent_id"]
@@ -97,6 +145,29 @@ def make_reviewing_node(
                 reason=gate_error,
             )
             return {"error": gate_error}
+
+        # ── Governance: max_lines_per_change ───────────────────────────────
+        if governance is not None:
+            lines_count = count_lines(list(state["files_changed"]))
+            if lines_count > governance.max_lines_per_change:
+                replan_count: int = state.get("replan_count", 0)  # type: ignore[call-overload]
+                _log.warning(
+                    "governance_violation",
+                    agent_id=agent_id,
+                    task_id=task_id,
+                    repo="",
+                    type="max_lines_per_change",
+                    lines_changed=lines_count,
+                    limit=governance.max_lines_per_change,
+                )
+                return {
+                    "phase": TaskPhase.PLANNING,
+                    "replan_count": replan_count + 1,
+                    "error": (
+                        "max_lines_per_change exceeded; "
+                        "split this change into smaller increments"
+                    ),
+                }
 
         return {
             "phase": TaskPhase.COORDINATING,

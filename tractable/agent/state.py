@@ -2,6 +2,7 @@
 
 TASK-2.3.1: State is passed between all four nodes and updated by each.
 TASK-2.5.2: Added ``current_model`` field for token-budget-driven model escalation.
+TASK-3.2.3: Added ``replan_count`` field for governance re-plan loop protection.
 """
 
 from __future__ import annotations
@@ -33,3 +34,4 @@ class AgentWorkflowState(TypedDict):
     resume_from: str | None  # Set by resume_task() when restoring from checkpoint
     snapshot_path: NotRequired[str | None]  # TASK-3.1.2: set by snapshot wrapper after each node
     snapshot_hash: NotRequired[str | None]  # TASK-3.1.2: SHA-256 of the snapshot archive
+    replan_count: NotRequired[int]  # TASK-3.2.3: incremented on each governance-triggered re-plan

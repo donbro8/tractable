@@ -327,8 +327,8 @@ def build_workflow(
     builder: StateGraph = StateGraph(AgentWorkflowState)
 
     planning_node = make_planning_node(tools, state_store, graph)
-    executing_node = make_executing_node(tools, state_store)
-    reviewing_node = make_reviewing_node(tools, state_store)
+    executing_node = make_executing_node(tools, state_store, governance=governance)
+    reviewing_node = make_reviewing_node(tools, state_store, governance=governance)
     coordinating_node = make_coordinating_node(tools, state_store)
 
     # Wrap nodes with budget checking when governance is provided.
