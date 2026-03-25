@@ -247,14 +247,26 @@ class CodeEditorTool:
             rel_path = str(resolved.relative_to(self._working_dir))
             if fnmatch.fnmatch(resolved_str, str(self._working_dir / rule.pattern)) or \
                fnmatch.fnmatch(rel_path, rule.pattern):
-                self._emit_blocked_log(resolved_str, reason="sensitive_path")
+                _log.warning(
+                    "sensitive_path_blocked",
+                    agent_id=self._agent_id,
+                    task_id=self._task_id,
+                    repo=self._repo,
+                    path=resolved_str,
+                    rule=rule.pattern,
+                    reason=rule.reason,
+                )
                 self._append_audit_sync(
                     action="sensitive_path_blocked",
-                    file_path=resolved_str,
+                    detail={
+                        "path": resolved_str,
+                        "rule": rule.pattern,
+                        "policy": rule.policy,
+                    },
                 )
                 raise GovernanceError(
-                    f"Path {resolved_str!r} matches sensitive path rule "
-                    f"{rule.pattern!r} (reason={rule.reason!r})",
+                    f"Sensitive path blocked: {resolved_str} matches rule "
+                    f"'{rule.pattern}' ({rule.reason})"
                 )
 
     def _emit_blocked_log(self, file_path: str, *, reason: str) -> None:
@@ -268,7 +280,13 @@ class CodeEditorTool:
             reason=reason,
         )
 
-    def _append_audit_sync(self, *, action: str, file_path: str) -> None:
+    def _append_audit_sync(
+        self,
+        *,
+        action: str,
+        file_path: str = "",
+        detail: dict[str, str] | None = None,
+    ) -> None:
         """Schedule audit entry append.
 
         Because ``_check_*`` helpers are called from sync context inside the
@@ -292,7 +310,7 @@ class CodeEditorTool:
             agent_id=self._agent_id,
             task_id=self._task_id,
             action=action,
-            detail={"file_path": file_path},
+            detail=detail if detail is not None else {"file_path": file_path},
             outcome="failure",
         )
         try:

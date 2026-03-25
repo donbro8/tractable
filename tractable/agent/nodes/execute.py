@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 
+from tractable.errors import GovernanceError
 from tractable.types.agent import AgentCheckpoint
 from tractable.types.enums import TaskPhase
 
@@ -115,9 +116,21 @@ def make_executing_node(
 
         for step in state["plan"]:
             if "code_editor" in tools:
-                result = await tools["code_editor"].invoke(
-                    {"action": "write", "step": step}
-                )
+                try:
+                    result = await tools["code_editor"].invoke(
+                        {"action": "write", "step": step}
+                    )
+                except GovernanceError as exc:
+                    _log.warning(
+                        "governance_error_in_executing",
+                        agent_id=agent_id,
+                        task_id=task_id,
+                        error=str(exc),
+                    )
+                    return {
+                        "phase": TaskPhase.REVIEWING,
+                        "error": str(exc),
+                    }
                 if result.success and result.output:
                     files_changed.append(str(result.output))
 

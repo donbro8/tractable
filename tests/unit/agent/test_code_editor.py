@@ -249,3 +249,63 @@ async def test_sensitive_path_blocked_appends_audit_entry(tmp_path: Path) -> Non
     state_store.append_audit_entry.assert_called_once()
     entry: AuditEntry = state_store.append_audit_entry.call_args[0][0]
     assert entry.action == "sensitive_path_blocked"
+
+
+# ── AC-1 (TASK-3.2.4): write raises GovernanceError + sensitive_path_blocked log
+# ── AC-2 (TASK-3.2.4): read on sensitive path is allowed ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_sensitive_path_write_raises_governance_error(tmp_path: Path) -> None:
+    """AC-1: write_file on a sensitive path raises GovernanceError with structlog event."""
+    (tmp_path / "db" / "migrations").mkdir(parents=True)
+    governance = GovernancePolicy(
+        sensitive_path_patterns=[
+            SensitivePathRule(
+                pattern="**/migrations/**",
+                reason="Database migrations require DBA review",
+                policy="human_approval_required",
+            )
+        ]
+    )
+    tool = _make_tool(tmp_path, governance=governance)
+
+    with structlog.testing.capture_logs() as logs, pytest.raises(GovernanceError) as exc_info:
+        await tool.invoke(
+            {
+                "operation": "write_file",
+                "path": "db/migrations/001_init.sql",
+                "content": "CREATE TABLE t (id INT);",
+            }
+        )
+
+    assert "migrations/**" in str(exc_info.value)
+    sensitive_logs = [e for e in logs if e.get("event") == "sensitive_path_blocked"]
+    assert len(sensitive_logs) >= 1, (
+        f"Expected sensitive_path_blocked log; got: {[e.get('event') for e in logs]}"
+    )
+    assert sensitive_logs[0].get("rule") == "**/migrations/**"
+
+
+@pytest.mark.asyncio
+async def test_sensitive_path_read_is_allowed(tmp_path: Path) -> None:
+    """AC-2: read_file on a sensitive path does NOT raise GovernanceError."""
+    (tmp_path / "db" / "migrations").mkdir(parents=True)
+    (tmp_path / "db" / "migrations" / "001_init.sql").write_text("SELECT 1")
+    governance = GovernancePolicy(
+        sensitive_path_patterns=[
+            SensitivePathRule(
+                pattern="**/migrations/**",
+                reason="Database migrations require DBA review",
+                policy="human_approval_required",
+            )
+        ]
+    )
+    tool = _make_tool(tmp_path, governance=governance)
+
+    result = await tool.invoke(
+        {"operation": "read_file", "path": "db/migrations/001_init.sql"}
+    )
+
+    assert result.success is True
+    assert result.output == "SELECT 1"

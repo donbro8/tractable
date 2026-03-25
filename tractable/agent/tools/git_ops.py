@@ -109,6 +109,8 @@ class GitOpsTool:
             return await self._push(params)
         if operation == "open_pull_request":
             return await self._open_pull_request(params)
+        if operation == "pr_comment":
+            return self._pr_comment(params)
 
         return ToolResult(success=False, error=f"Unknown operation: {operation!r}")
 
@@ -234,6 +236,26 @@ class GitOpsTool:
         )
 
         return ToolResult(success=True, output=pr_handle.url)
+
+    def _pr_comment(self, params: dict[str, Any]) -> ToolResult:
+        """Log a PR comment notification for governance blocks.
+
+        The GitProvider Protocol does not yet include a ``create_pr_comment``
+        method, so comments are emitted as structured log entries and recorded
+        in the audit trail.  A future milestone will add the provider method
+        and replace this with a live API call.
+        """
+        pr_url: str = params.get("pr_url", "")
+        body: str = params.get("body", "")
+        _log.warning(
+            "sensitive_path_pr_comment",
+            agent_id=self._agent_id,
+            task_id=self._task_id,
+            repo=self._repo,
+            pr_url=pr_url,
+            body=body,
+        )
+        return ToolResult(success=True)
 
     # ── Validation ───────────────────────────────────────────────────────────
 

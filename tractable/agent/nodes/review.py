@@ -123,6 +123,21 @@ def make_reviewing_node(
             phase=TaskPhase.REVIEWING,
         )
 
+        # ── GovernanceError from EXECUTING: notify human and preserve error ──
+        existing_error = state["error"]
+        if existing_error is not None and existing_error.startswith("Sensitive path blocked"):
+            pr_url = state["pr_url"] or ""
+            body = (
+                f"⚠️ Sensitive path blocked\n\n{existing_error}\n\n"
+                "Please review and either approve the path write or update "
+                "the task description to avoid this path."
+            )
+            if "git_ops" in tools:
+                await tools["git_ops"].invoke(
+                    {"operation": "pr_comment", "pr_url": pr_url, "body": body}
+                )
+            return {"error": existing_error}
+
         # Enforce governance gates via mocked tools.
         # In Milestone 2.4 the real test_runner and linter tools replace mocks.
         gate_error: str | None = None
