@@ -69,6 +69,16 @@ class AgentCheckpointORM(Base):
     workflow_state: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
 
 
+class RepoPollStateORM(Base):
+    """Tracks the last-polled commit SHA for repos using the polling fallback."""
+
+    __tablename__ = "repo_poll_state"
+
+    repo_id: Mapped[str] = mapped_column(String, primary_key=True)
+    last_polled_sha: Mapped[str | None] = mapped_column(String, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class AuditEntryORM(Base):
     """Immutable audit record — INSERT only, no UPDATE or DELETE."""
 

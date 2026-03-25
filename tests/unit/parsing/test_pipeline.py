@@ -459,12 +459,9 @@ async def test_fatal_error_on_zero_files_parsed(
 async def test_pipeline_ingests_hcl_repo(
     pipeline: GraphConstructionPipeline,
 ) -> None:
-    """AC-3 (TASK-3.2.1): ingest_repository on a .tf fixture produces terraform_resource entities."""
-    from pathlib import Path as _Path
-
+    """AC-3 (TASK-3.2.1): ingest_repository on .tf fixture produces terraform_resource entities."""
     import tempfile as _tempfile
-
-    import tractable.parsing.pipeline as _pl
+    from pathlib import Path as _Path
 
     # Use the fixture terraform directory as a stand-in repo
     fixture_dir = (
@@ -518,7 +515,7 @@ async def test_pipeline_ingests_hcl_repo(
     ]
     assert len(resource_entities) >= 1, (
         f"Expected at least one terraform_resource entity; "
-        f"got kinds: {[m.payload.get('kind') for m in captured_mutations if m.operation == 'create_entity']}"
+        f"got kinds: {[m.payload.get('kind') for m in captured_mutations if m.operation == 'create_entity']}"  # noqa: E501
     )
     assert result.files_parsed >= 1
 

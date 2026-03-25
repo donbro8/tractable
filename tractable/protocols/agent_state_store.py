@@ -66,3 +66,11 @@ class AgentStateStore(Protocol):
     ) -> Sequence[AuditEntry]:
         """Query the audit log."""
         ...
+
+    async def get_last_polled_sha(self, repo_id: str) -> str | None:
+        """Return the last commit SHA observed by the poller for *repo_id*, or None."""
+        ...
+
+    async def set_last_polled_sha(self, repo_id: str, sha: str) -> None:
+        """Persist the last commit SHA observed by the poller for *repo_id*."""
+        ...

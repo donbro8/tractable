@@ -496,6 +496,9 @@ class RepositoryRegistration(BaseModel):
 
     pinned_instructions: list[str] = Field(default_factory=list)
 
+    webhook_secret: str | None = None
+    poll_interval_seconds: int = 60
+
     scope: AgentScope | None = None
 
     custom_parsers: list[str] = Field(default_factory=list)

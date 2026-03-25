@@ -28,11 +28,17 @@ from sqlalchemy.exc import TimeoutError as _SQLTimeoutError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from tractable.errors import FatalError, RecoverableError, TransientError
-from tractable.state.models import AgentCheckpointORM, AgentContextORM, AuditEntryORM
+from tractable.state.models import (
+    AgentCheckpointORM,
+    AgentContextORM,
+    AuditEntryORM,
+    RepoPollStateORM,
+)
 from tractable.types.agent import AgentCheckpoint, AgentContext, AuditEntry
 from tractable.types.enums import TaskPhase
 
 log = structlog.get_logger(__name__)
+
 
 def _now() -> datetime:
     return datetime.now(tz=UTC)
@@ -173,7 +179,7 @@ class PostgreSQLAgentStateStore:
         )
         async with _catch_db_errors(), self._session_factory() as session, session.begin():
             session.add(row)
-        
+
         log.info(
             "checkpoint_saved",
             agent_id=agent_id,
@@ -222,6 +228,32 @@ class PostgreSQLAgentStateStore:
         async with _catch_db_errors(), self._session_factory() as session:
             result = await session.execute(stmt)
             return [_orm_to_audit_entry(row) for row in result.scalars()]
+
+    # ── Polling state ─────────────────────────────────────────────────────────
+
+    async def get_last_polled_sha(self, repo_id: str) -> str | None:
+        """Return the last commit SHA stored for *repo_id*, or None if not set."""
+        async with _catch_db_errors(), self._session_factory() as session:
+            row = await session.get(RepoPollStateORM, repo_id)
+            return row.last_polled_sha if row is not None else None
+
+    async def set_last_polled_sha(self, repo_id: str, sha: str) -> None:
+        """Upsert the last-polled SHA for *repo_id*."""
+        values: dict[str, Any] = {
+            "repo_id": repo_id,
+            "last_polled_sha": sha,
+            "updated_at": _now(),
+        }
+        stmt = (
+            pg_insert(RepoPollStateORM)
+            .values(**values)
+            .on_conflict_do_update(
+                index_elements=["repo_id"],
+                set_={k: v for k, v in values.items() if k != "repo_id"},
+            )
+        )
+        async with _catch_db_errors(), self._session_factory() as session, session.begin():
+            await session.execute(stmt)
 
 
 # ── Mapping helpers ───────────────────────────────────────────────────────────
