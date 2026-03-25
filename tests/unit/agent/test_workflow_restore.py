@@ -385,12 +385,11 @@ async def test_legacy_checkpoint_skips_restore_and_logs_warning() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         working_dir = Path(tmp) / "workdir"
         working_dir.mkdir()
-        sentinel_file = working_dir / "sentinel.txt"
-        sentinel_file.write_text("untouched\n")
 
         with (
             patch("tractable.agent.workflow.build_workflow", return_value=fake_workflow),
             patch("tractable.agent.workflow._log") as mock_log,
+            patch("tractable.agent.workflow.restore_snapshot") as mock_restore,
         ):
             await resume_task(
                 agent_id="agent-1",
@@ -402,8 +401,8 @@ async def test_legacy_checkpoint_skips_restore_and_logs_warning() -> None:
                 working_dir=working_dir,
             )
 
-        # Working directory must be untouched (no restore attempted).
-        assert sentinel_file.read_text() == "untouched\n"
+        # No restore must have been attempted (legacy checkpoint has no snapshot_path).
+        mock_restore.assert_not_called()
 
         # snapshot_missing warning must have been logged.
         mock_log.warning.assert_called_with(
