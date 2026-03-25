@@ -1,77 +1,152 @@
 # Tractable
 
-Tractable is an autonomous multi-agent coding framework. Agents act as **external contributors** to your repositories — they clone, branch, write code, run tests, and open pull requests, exactly as a human engineer would. Agent identity and context live in a central state store, not inside any managed repository.
+## What is Tractable
+
+Tractable is an autonomous multi-agent coding framework. Agents act as **external contributors** to your repositories — they clone, branch, write code, run tests, and open pull requests, exactly as a human engineer would. Agent identity and context live in a central state store, not inside any managed repository. The graph is the memory: Tractable builds a live temporal knowledge graph of your codebase so agents never re-read entire repos from scratch.
 
 > **Current status:** Phases 1 and 2 complete. The core infrastructure, LangGraph agent runtime, and single-repo agent workflow are fully implemented and tested. Phase 3 (CI/CD, HCL parsing, polling fallback, governance hardening) is next.
 
 ---
 
+## Prerequisites
+
+- **Docker** and **Docker Compose** — for the service stack (FalkorDB, PostgreSQL, Redis)
+- **Python 3.11+** with [uv](https://docs.astral.sh/uv/) — install uv with `curl -Lsf https://astral.sh/uv/install.sh | sh`
+- **Git** — for cloning the repository
+- **GitHub account** with a [personal access token](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens) (repo + webhook scopes) — required for repository operations
+
+---
+
 ## Quickstart (5 minutes)
 
-### 1. Start the service stack
+The following commands take you from a fresh clone to a running agent in under 5 minutes. Run them in order; each step's purpose and expected output are shown.
+
+### Step 1 — Clone the repository
 
 ```bash
-cp .env.example .env          # fill in credentials (see Environment Variables below)
-docker compose -f deploy/docker-compose.yml up
+git clone https://github.com/your-org/tractable.git && cd tractable
 ```
 
-This starts FalkorDB (graph store), PostgreSQL (agent state), Redis (event bus), and the Tractable registry service.
+Clones Tractable and enters the project directory. You should see a `tractable/` directory with `pyproject.toml`, `deploy/`, `examples/`, and this README.
 
-### 2. Apply database migrations
+### Step 2 — Set up environment variables
+
+```bash
+cp .env.example .env          # fill in DATABASE_URL, REDIS_URL, GITHUB_TOKEN
+```
+
+Creates your local `.env` from the template. Open `.env` and fill in at minimum `DATABASE_URL`, `REDIS_URL`, `GITHUB_TOKEN`, and `ANTHROPIC_API_KEY`. Do not commit `.env` — it is listed in `.gitignore`.
+
+### Step 3 — Start the service stack
+
+```bash
+docker compose -f deploy/docker-compose.yml up -d
+```
+
+Starts FalkorDB (graph store), PostgreSQL (agent state), Redis (event bus), and the Tractable registry service in the background. Expected output: containers `tractable-falkordb-1`, `tractable-postgres-1`, `tractable-redis-1`, and `tractable-registry-1` all show `Started`.
+
+### Step 4 — Install Python dependencies
+
+```bash
+uv sync --extra dev
+```
+
+Creates a virtual environment and installs Tractable and all development tools (ruff, pyright, pytest). Expected output: `Resolved N packages` followed by `Installed N packages`.
+
+### Step 5 — Apply database migrations
 
 ```bash
 uv run alembic upgrade head
 ```
 
-### 3. Register a repository
+Creates all PostgreSQL tables (agent contexts, checkpoints, audit log). Expected output: `Running upgrade -> <revision_id>, <migration description>` for each migration, ending with no error.
 
-Create a registration config (see `examples/register_python_api.py`):
-
-```python
-# my_repo.py
-from tractable.types.config import RepositoryRegistration, GitProviderConfig
-
-registration = RepositoryRegistration(
-    name="my-org/my-api",
-    git_url="https://github.com/my-org/my-api.git",
-    git_provider=GitProviderConfig(
-        provider_type="github",
-        credentials_secret_ref="GITHUB_TOKEN",
-        default_branch="main",
-    ),
-    primary_language="python",
-    agent_template="api_maintainer",
-)
-```
-
-Then register it:
+### Step 6 — Register a repository
 
 ```bash
-tractable register my_repo.py
+tractable register examples/register_python_api.py
 ```
 
-This validates the config, clones the repository, ingests the codebase into the knowledge graph, creates an agent instance from the template, and registers the GitHub webhook endpoint.
+Validates the registration config, clones the repository, ingests the codebase into the knowledge graph, creates an agent instance from the template, and registers the GitHub webhook endpoint. Expected output:
+```
+Registered agent <agent-id> for repo my-org/my-api
+Webhook registered at https://<host>/webhooks/github
+```
 
-### 4. Submit a task
+### Step 7 — Submit a task
 
 ```bash
-tractable task submit --agent <agent-id> --description "Add input validation to the /users endpoint"
+tractable task submit "Fix the failing test" --repo my-api
 ```
 
-### 5. Watch it work
+Creates a task record and assigns it to the agent for `my-api`. Expected output: a UUID task ID printed to stdout, e.g. `a3f1b2c4-...`.
+
+### Step 8 — Check status
 
 ```bash
 tractable status
-tractable logs --task <task-id>
 ```
 
-The agent plans, writes code, runs tests, and opens a pull request. In `SUPERVISED` mode (the default), it always PRs — you merge.
+Shows all registered repositories and their agent states. Expected output: a table with your repo listed and agent status `IDLE` (task queued) or `WORKING` (agent executing). Within seconds the agent begins planning.
 
 ---
 
-## What It Does
+## Core Commands
 
-### The agent workflow
+| Command | Purpose |
+|---|---|
+| `tractable register <config.py>` | Register a repository: validate config, clone repo, ingest graph, create agent, register webhook |
+| `tractable status` | Show all registered repos and the current state of their agents (IDLE, WORKING, BLOCKED) |
+| `tractable agent list` | List all agent instances with their IDs, repos, autonomy level, and current status |
+| `tractable agent context <agent-id>` | Print the assembled system prompt that will be fed to the LLM for this agent |
+| `tractable agent edit <agent-id>` | Open the agent's pinned instructions in `$EDITOR` — changes take effect on the next task |
+| `tractable task submit "<description>" --repo <name>` | Submit a natural-language task to the agent for the named registered repo |
+| `tractable task status <task-id>` | Show the current phase and status of a specific task (PLANNING, EXECUTING, REVIEWING, DONE, FAILED) |
+| `tractable logs` | Stream structured logs; filter by `--agent <id>` or `--task <id>`; follow with `--follow` |
+
+---
+
+## Architecture Overview
+
+Tractable is built in layers: Pydantic v2 core models (`tractable/types/`) define all data structures; structural Protocols (`tractable/protocols/`) define every integration contract; concrete implementations (GitHub provider, FalkorDB graph, PostgreSQL state store) satisfy those Protocols and can be swapped without touching the agent runtime. The LangGraph agent executes four sequential nodes — `PLANNING → EXECUTING → REVIEWING → COORDINATING` — with checkpoint state saved at every transition so crashed agents resume from their last node. A FastAPI webhook receiver keeps the knowledge graph in sync within seconds of every commit, so agents always have current context. See [docs/decisions/](docs/decisions/) for architectural decision records (including the graph database evaluation) and [PLAN.md](.claude/PLAN.md) for the full implementation plan.
+
+```
+tractable/
+├── types/          # Pydantic v2 core models (agent, config, git, graph, task)
+├── protocols/      # Structural Protocol interfaces for every integration point
+├── providers/      # Git provider implementations (GitHub; GitLab stub)
+├── graph/          # FalkorDB client + temporal graph implementation
+├── parsing/        # tree-sitter parsers (Python, TypeScript) + ingestion pipeline
+├── state/          # SQLAlchemy async + PostgreSQL (AgentContext, checkpoints, audit)
+├── agent/          # LangGraph workflow, nodes, tools, lifecycle manager
+├── reactivity/     # FastAPI webhook receiver, change ingestion, notification router
+├── registry/       # FastAPI registry service
+├── events/         # Redis Pub/Sub event bus
+├── cli/            # Typer CLI (register, status, agent, task, logs)
+├── errors.py       # Error taxonomy (Transient, Recoverable, Governance, Fatal)
+└── logging.py      # structlog configuration
+```
+
+### Design rules
+
+**Protocols are the contract boundary.** Every integration point in `tractable/protocols/` is a structural Protocol. Swap an implementation (e.g. FalkorDB → Neo4j, GitHub → GitLab) by providing a class that satisfies the Protocol — agent logic never changes. Pyright runs in strict mode on `protocols/` and `types/`.
+
+**Temporal graph.** All graph nodes carry `valid_from`, `valid_until`, `observed_at`, and `commit_sha`. Modifying a file closes the old entity version and opens a new one; nothing is ever deleted. `TemporalCodeGraph.get_changes_since(t)` is the agent's primary catch-up mechanism after dormancy.
+
+**Error taxonomy.** All errors are one of four types:
+
+| Type | Behaviour |
+|---|---|
+| `TransientError` | Retry with exponential backoff (max 3 attempts) |
+| `RecoverableError` | Re-plan the current task phase |
+| `GovernanceError` | Halt, write audit entry, notify human |
+| `FatalError` | Fail task gracefully, preserve checkpoint |
+
+**Structured logging.** Every log entry includes `agent_id`, `task_id`, `repo`, `event`, and `level`. JSON in production; coloured console in development.
+
+---
+
+## The agent workflow
 
 Every agent executes four sequential phases managed by LangGraph:
 
@@ -104,42 +179,6 @@ Every agent operates under a `GovernancePolicy` that constrains its behaviour:
 - **Change limits** — `max_files_per_change` and `max_lines_per_change` guards prevent runaway edits
 - **Sensitive paths** — writes matching a `SensitivePathRule` pattern pause execution, write an audit entry, and notify a human reviewer before resuming
 - **Audit log** — every agent action is written to an append-only `AuditEntry` store; `GovernanceError` and above also appear in structured logs
-
----
-
-## Architecture
-
-```
-tractable/
-├── types/          # Pydantic v2 core models (agent, config, git, graph, task)
-├── protocols/      # Structural Protocol interfaces for every integration point
-├── providers/      # Git provider implementations (GitHub; GitLab stub)
-├── graph/          # FalkorDB client + temporal graph implementation
-├── parsing/        # tree-sitter parsers (Python, TypeScript) + ingestion pipeline
-├── state/          # SQLAlchemy async + PostgreSQL (AgentContext, checkpoints, audit)
-├── agent/          # LangGraph workflow, nodes, tools, lifecycle manager
-├── reactivity/     # FastAPI webhook receiver, change ingestion, notification router
-├── registry/       # FastAPI registry service
-├── events/         # Redis Pub/Sub event bus
-├── cli/            # Typer CLI (register, status, agent, task, logs)
-├── errors.py       # Error taxonomy (Transient, Recoverable, Governance, Fatal)
-└── logging.py      # structlog configuration
-```
-
-### Design rules
-
-**Protocols are the contract boundary.** Every integration point in `tractable/protocols/` is a structural Protocol. Swap an implementation (e.g. FalkorDB → Neo4j, GitHub → GitLab) by providing a class that satisfies the Protocol — agent logic never changes. Pyright runs in strict mode on `protocols/` and `types/`.
-
-**Error taxonomy.** All errors are one of four types:
-
-| Type | Behaviour |
-|---|---|
-| `TransientError` | Retry with exponential backoff (max 3 attempts) |
-| `RecoverableError` | Re-plan the current task phase |
-| `GovernanceError` | Halt, write audit entry, notify human |
-| `FatalError` | Fail task gracefully, preserve checkpoint |
-
-**Structured logging.** Every log entry includes `agent_id`, `task_id`, `repo`, `event`, and `level`. JSON in production; coloured console in development.
 
 ---
 
@@ -190,33 +229,6 @@ registration = RepositoryRegistration(
 | `FALKORDB_PORT` | Yes | FalkorDB port (default: `6380`) |
 
 Copy `.env.example` to `.env` and fill in values before running.
-
----
-
-## CLI Reference
-
-```bash
-# Register a repository
-tractable register <config.py>
-
-# Show status of all registered repos and their agents
-tractable status
-tractable status --repo <name>
-
-# Manage agents
-tractable agent list
-tractable agent context <agent-id>
-tractable agent edit <agent-id>          # open agent context in $EDITOR
-
-# Submit and manage tasks
-tractable task submit --agent <id> --description "..."
-tractable task status <task-id>
-tractable task cancel <task-id>
-
-# View logs
-tractable logs --agent <agent-id>
-tractable logs --task <task-id>
-```
 
 ---
 
@@ -316,29 +328,11 @@ uv run pyright             # strict type check
 - GitLab and CodeCommit providers
 - LLM fuzzy reference resolver (cross-file entity linking without exact names)
 
-### Phase 5+
-
-- Hierarchical sub-repo agents (folder-level and file-level specialisation)
-- Manager/execution agent split
-
-### Phase 6+
-
-- A2A (agent-to-agent) communication protocol
-- Cross-cutting meta-agents (code reviewer, security scanner, DevOps monitor)
-- Centralised agent card registry
-
-### Phase 7+
-
-- Management UI with full project → repository → agent hierarchy visibility
-- Auto-provisioning of optimal agent topology from repository analysis
-- Kubernetes deployment manifests
-- Scale to thousands of concurrent agents
-
 ---
 
 ## Contributing
 
-Standard pull-request workflow. The CI pipeline enforces lint, type-check, unit tests, and integration tests on every PR. Run these locally before opening a PR:
+Standard pull-request workflow. See [docs/contributing/migrations.md](docs/contributing/migrations.md) for guidance on database migrations. The CI pipeline enforces lint, type-check, unit tests, and integration tests on every PR — all checks must pass before merge. Run these locally before opening a PR:
 
 ```bash
 uv run ruff check tractable/ tests/
@@ -348,6 +342,15 @@ uv run pytest tests/integration  # requires: docker compose -f deploy/docker-com
 ```
 
 Versioning follows [Semantic Versioning](https://semver.org/). Breaking changes to `tractable/protocols/` or `tractable/types/` always increment the major version.
+
+### Required secrets for CI
+
+Configure the following secrets in your GitHub repository (Settings → Secrets and variables → Actions):
+
+| Secret | Purpose |
+|---|---|
+| `ANTHROPIC_API_KEY` | LLM calls in integration and E2E tests |
+| `GITHUB_TEST_TOKEN` | E2E tests that create branches and PRs on fixture repos |
 
 ### Branch Protection Settings
 
@@ -364,3 +367,9 @@ Recommended additional settings:
 - **Require a pull request before merging** — at least 1 approving review
 - **Require branches to be up to date before merging**
 - **Do not allow bypassing the above settings**
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.
